@@ -53,9 +53,15 @@ resolve_install_dir() {
 download() {
   url=$1
   out=$2
+  quiet=${3:-}
   if have curl; then
-    curl -fSL --proto '=https' --tlsv1.2 --connect-timeout 15 --retry 2 -o "$out" "$url" \
-      || die "download failed: $url"
+    if [ -n "$quiet" ]; then
+      curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --retry 2 -o "$out" "$url" \
+        || die "download failed: $url"
+    else
+      curl -fL --progress-bar --proto '=https' --tlsv1.2 --connect-timeout 15 --retry 2 -o "$out" "$url" \
+        || die "download failed: $url"
+    fi
   elif have wget; then
     wget --https-only --timeout=15 --tries=3 -qO "$out" "$url" \
       || die "download failed: $url"
@@ -103,8 +109,8 @@ sha="${tmpdir}/${asset}.sha256"
 info "downloading ${base}/${asset}"
 download "${base}/${asset}" "$bin"
 
+download "${base}/${asset}.sha256" "$sha" quiet
 info "verifying checksum"
-download "${base}/${asset}.sha256" "$sha"
 verify_sha "$bin" "$sha"
 
 dir=$(resolve_install_dir)
