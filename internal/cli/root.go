@@ -38,7 +38,7 @@ env vars passed through to the runner image:
   sabokit status --servers app01
   sabokit logs authentik -f
   sabokit apps list --enabled`,
-		SilenceUsage:  true,
+		SilenceUsage:  false,
 		SilenceErrors: false,
 	}
 
@@ -46,6 +46,7 @@ env vars passed through to the runner image:
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")
 
 	cmd.AddCommand(
+		newQuickstartCmd(),
 		newInitCmd(),
 		newUpCmd(),
 		newDeployCmd(),

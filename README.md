@@ -10,6 +10,42 @@ curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/master/install.
 
 binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v0.1.0`.
 
+## quickstart
+
+`sabokit init` is a stub in v0.1.0, so first-time setup is manual:
+
+```bash
+mkdir my-stack && cd my-stack && mkdir .sabokit
+
+cat > .sabokit/config.yml <<'EOF'
+project: my-stack
+scaleway: {region: fr-par, zone: fr-par-1}
+ssh: {user: root, key: ~/.ssh/id_ed25519}
+EOF
+
+cat > apps-manifest.yaml <<'EOF'
+apps:
+  espocrm: {enabled: true, host: app01}
+EOF
+
+cat > inventory.ini <<'EOF'
+[all]
+app01 ansible_host=51.x.x.x
+EOF
+
+export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
+
+# default image is v3.0.0 (not yet published) — point at the older runner:
+alias sabokit='sabokit --image ghcr.io/sheyaln/federated-commons-runner:v2.17.0'
+
+sabokit apps list                                       # verify config parses
+sabokit deploy --apps espocrm --servers app01 --print   # see the docker invocation
+sabokit deploy --apps espocrm --servers app01 --check   # ansible dry-run
+sabokit deploy --apps espocrm --servers app01           # for real
+```
+
+run `sabokit quickstart` for the full walkthrough with troubleshooting.
+
 ## requires
 
 - docker (daemon must be running for `deploy`/`down`/`status`/`up`/`secrets`)
