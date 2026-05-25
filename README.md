@@ -36,7 +36,7 @@ EOF
 export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
 
 # default image is v3.0.0 (not yet published) — point at the older runner:
-alias sabokit='sabokit --image ghcr.io/sheyaln/federated-commons-runner:v2.17.0'
+export SABOKIT_IMAGE=ghcr.io/sheyaln/federated-commons-runner:v2.17.0
 
 sabokit apps list                                       # verify config parses
 sabokit deploy --apps espocrm --servers app01 --print   # see the docker invocation

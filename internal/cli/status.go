@@ -16,6 +16,7 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	var apps, servers []string
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "terraform output + container state per host",
@@ -41,11 +42,12 @@ project's ssh key (from .sabokit/config.yml) is mounted read-only.`,
   # show only containers whose name contains 'espocrm' or 'authentik'
   sabokit status --apps espocrm,authentik`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(apps, servers)
+			return runStatus(apps, servers, dryRun)
 		},
 	}
 	cmd.Flags().StringSliceVar(&apps, "apps", nil, "filter container list by app name")
 	cmd.Flags().StringSliceVar(&servers, "servers", nil, "restrict to specific hosts")
+	cmd.Flags().BoolVar(&dryRun, "print", false, "print the docker invocations without running them")
 	return cmd
 }
 
@@ -54,10 +56,19 @@ type tfOutput struct {
 	Sensitive bool `json:"sensitive"`
 }
 
-func runStatus(apps, servers []string) error {
+func runStatus(apps, servers []string, dryRun bool) error {
 	p, err := project.Load()
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		for _, layer := range []string{"base", "identity", "apps"} {
+			inv := layerOutputInvocation(p, layer)
+			fmt.Println("docker", strings.Join(inv.Args(), " "))
+		}
+		inv := containerStateInvocation(p, servers)
+		fmt.Println("docker", strings.Join(inv.Args(), " "))
+		return nil
 	}
 	if err := docker.Preflight(); err != nil {
 		return err
@@ -76,13 +87,36 @@ func runStatus(apps, servers []string) error {
 	return printContainerState(p, apps, servers)
 }
 
-func printLayerOutputs(tw *tabwriter.Writer, p *project.Project, layer string) {
+func layerOutputInvocation(p *project.Project, layer string) docker.Invocation {
 	inv := baseInvocation(p)
 	inv.TTY = false
 	inv.Workdir = filepath.Join(terraformDir, layer)
 	inv.Entrypoint = "terraform"
 	inv.Cmd = []string{"output", "-json"}
+	return inv
+}
 
+func containerStateInvocation(p *project.Project, servers []string) docker.Invocation {
+	cmd := []string{
+		"all",
+		"-i", filepath.Join(containerWorkspace, p.Config.Inventory),
+		"-m", "shell",
+		"-a", "docker ps --format '{{.Names}}\t{{.Status}}'",
+		"-o",
+	}
+	if len(servers) > 0 {
+		cmd = append(cmd, "--limit", strings.Join(servers, ","))
+	}
+	inv := baseInvocation(p)
+	inv.TTY = false
+	inv.Workdir = playbookDir
+	inv.Entrypoint = "ansible"
+	inv.Cmd = cmd
+	return inv
+}
+
+func printLayerOutputs(tw *tabwriter.Writer, p *project.Project, layer string) {
+	inv := layerOutputInvocation(p, layer)
 	var stdout bytes.Buffer
 	c := inv.Command()
 	c.Stdout = &stdout
@@ -122,23 +156,7 @@ func formatTfValue(o tfOutput) string {
 }
 
 func printContainerState(p *project.Project, apps, servers []string) error {
-	cmd := []string{
-		"all",
-		"-i", filepath.Join(containerWorkspace, p.Config.Inventory),
-		"-m", "shell",
-		"-a", "docker ps --format '{{.Names}}\t{{.Status}}'",
-		"-o",
-	}
-	if len(servers) > 0 {
-		cmd = append(cmd, "--limit", strings.Join(servers, ","))
-	}
-
-	inv := baseInvocation(p)
-	inv.TTY = false
-	inv.Workdir = playbookDir
-	inv.Entrypoint = "ansible"
-	inv.Cmd = cmd
-
+	inv := containerStateInvocation(p, servers)
 	var stdout bytes.Buffer
 	c := inv.Command()
 	c.Stdout = &stdout

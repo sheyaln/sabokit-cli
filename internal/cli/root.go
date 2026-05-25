@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
@@ -17,9 +19,15 @@ type GlobalFlags struct {
 var globals GlobalFlags
 
 func NewRootCmd() *cobra.Command {
+	defaultImage := DefaultRunnerImage + ":" + DefaultRunnerTag
+	if env := os.Getenv("SABOKIT_IMAGE"); env != "" {
+		defaultImage = env
+	}
+
 	cmd := &cobra.Command{
-		Use:   "sabokit",
-		Short: "deploy and operate federated-commons stacks",
+		Use:     "sabokit",
+		Version: Version,
+		Short:   "deploy and operate federated-commons stacks",
 		Long: `sabokit orchestrates the sabokit-runner image to provision and manage
 federated-commons stacks on scaleway. it is a thin orchestrator: terraform
 and ansible run inside the runner image, sabokit shells out to docker.
@@ -31,7 +39,10 @@ requirements:
 a sabokit project is any directory containing .sabokit/config.yml. sabokit
 walks up from cwd to find it. see README.md for the config schema.
 
-env vars passed through to the runner image:
+env vars:
+  SABOKIT_IMAGE                       overrides --image default (repository:tag)
+
+passed through to the runner image:
   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_PROJECT_ID,
   SCW_DEFAULT_ORGANIZATION_ID, SCW_DEFAULT_REGION, SCW_DEFAULT_ZONE`,
 		Example: `  sabokit deploy --apps espocrm --check
@@ -42,7 +53,7 @@ env vars passed through to the runner image:
 		SilenceErrors: false,
 	}
 
-	cmd.PersistentFlags().StringVar(&globals.Image, "image", DefaultRunnerImage+":"+DefaultRunnerTag, "runner image ref (repository:tag)")
+	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref (repository:tag); env: SABOKIT_IMAGE")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")
 
 	cmd.AddCommand(

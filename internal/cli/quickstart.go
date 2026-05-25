@@ -77,10 +77,10 @@ prerequisites:
 
 7. pick a runner image
    --------------------
-   v0.1.0 defaults --image to ghcr.io/sheyaln/sabokit-runner:v3.0.0, which
-   does not exist yet. until it ships, point at the older runner:
+   the default --image is ghcr.io/sheyaln/sabokit-runner:v3.0.0, which does
+   not exist yet. until it ships, point at the older runner via env:
 
-   alias sabokit='sabokit --image ghcr.io/sheyaln/federated-commons-runner:v2.17.0'
+   export SABOKIT_IMAGE=ghcr.io/sheyaln/federated-commons-runner:v2.17.0
 
    (only 'deploy' works against v2.17.0. 'down' and parts of 'status' need
     v3.0.0 to land first.)
