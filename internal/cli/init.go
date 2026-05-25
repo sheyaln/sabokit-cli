@@ -10,13 +10,14 @@ func newInitCmd() *cobra.Command {
 		Short: "scaffold a new consumer project",
 		Long: `not yet implemented in v0.1.0.
 
-planned behavior: render federated-commons' consumer-template/ into a new
-directory named <project-name>. interactive prompts for org name, base
+planned behavior: fetch consumer-template/ from the federated-commons repo
+at a pinned tag (git clone --depth 1 --branch <tag>) and render it into a
+new directory named <project-name>. interactive prompts for org name, base
 domain, scaleway region, ssh key path, etc. writes .sabokit/config.yml,
 terraform.tfvars, inventory.ini, and apps-manifest.yaml.
 
-template source is an open question: embed via //go:embed at build time,
-or fetch from the federated-commons repo at a pinned tag at init time.
+the pinned tag matches sabokit's default runner image tag; override with
+--from-template-tag once the flag exists.
 
 manual equivalent for v0.1.0: copy consumer-template/ from
 federated-commons yourself and edit the files by hand.`,

@@ -8,11 +8,14 @@ func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "manage scaleway secrets",
-		Long: `subcommands wrap 'scw secret' inside the runner image. uses your
-SCW_* env vars (access key, secret key, project/org/region) — sabokit
-passes them through to the container.
+		Long: `deferred — may not ship at all. a thin proxy over 'scw secret' adds a
+docker hop without value. only worth implementing if sabokit can replace
+scaleway's uuid-driven surface with stable, human-readable names (resolve
+name → uuid internally, hide uuids in output, support 'latest' and tagged
+versions without lookups).
 
-not yet implemented in v0.1.0.`,
+until then, use 'scw secret' directly inside the runner image (or on the
+host if you have the scw cli installed).`,
 	}
 	cmd.AddCommand(newSecretsCreateCmd(), newSecretsRotateCmd())
 	return cmd
@@ -22,10 +25,10 @@ func newSecretsCreateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "create <name> <value>",
 		Short: "create a new scaleway secret",
-		Long: `not yet implemented in v0.1.0.
+		Long: `deferred — see 'sabokit secrets --help' for the why.
 
-planned behavior: 'scw secret create name=<name>' inside the runner image,
-then push <value> as the initial version. requires SCW_* env vars set.`,
+manual: 'scw secret create name=<name>' then 'scw secret version create'
+with the value.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("secrets create")
@@ -38,14 +41,10 @@ func newSecretsRotateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rotate <name>",
 		Short: "push new version of a secret and redeploy affected apps",
-		Long: `not yet implemented in v0.1.0.
+		Long: `deferred — see 'sabokit secrets --help' for the why.
 
-planned behavior: push a new version of <name> via 'scw secret version
-create', then chain into 'sabokit deploy --apps <apps> --rotate-secrets'
-so the affected apps pick up the new value.
-
-manual equivalent for v0.1.0: run 'scw secret version create' yourself,
-then 'sabokit deploy --apps <X> --rotate-secrets'.`,
+manual: 'scw secret version create' then
+'sabokit deploy --apps <X> --rotate-secrets'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("secrets rotate")
