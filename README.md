@@ -5,7 +5,7 @@ cli for deploying and operating federated-commons stacks. shells out to the `sab
 ## install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/master/install.sh | bash
 ```
 
 binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v0.1.0`.
