@@ -7,15 +7,16 @@ import (
 func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
-		Short: "manage scaleway secrets",
-		Long: `deferred — may not ship at all. a thin proxy over 'scw secret' adds a
-docker hop without value. only worth implementing if sabokit can replace
-scaleway's uuid-driven surface with stable, human-readable names (resolve
-name → uuid internally, hide uuids in output, support 'latest' and tagged
-versions without lookups).
+		Short: "manage scaleway secrets by human name",
+		Long: `wraps 'scw secret' inside the runner image with a name-first surface.
+scaleway's native cli is uuid-driven — listing returns uuids, reading a
+value is a multi-step chain (find secret → find version → access). sabokit
+hides that: every command takes the human name, resolves name → uuid
+internally, defaults version selection to 'latest', and prints names (not
+uuids) in output unless --uuids is passed.
 
-until then, use 'scw secret' directly inside the runner image (or on the
-host if you have the scw cli installed).`,
+not yet implemented in v0.1.0. uses SCW_* env vars passed through to the
+runner image.`,
 	}
 	cmd.AddCommand(newSecretsCreateCmd(), newSecretsRotateCmd())
 	return cmd
@@ -24,11 +25,15 @@ host if you have the scw cli installed).`,
 func newSecretsCreateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "create <name> <value>",
-		Short: "create a new scaleway secret",
-		Long: `deferred — see 'sabokit secrets --help' for the why.
+		Short: "create a new scaleway secret with an initial value",
+		Long: `not yet implemented in v0.1.0.
 
-manual: 'scw secret create name=<name>' then 'scw secret version create'
-with the value.`,
+planned behavior: 'scw secret create name=<name>' inside the runner image,
+then push <value> as version 1. fails if a secret with that name already
+exists (use 'sabokit secrets rotate' for new versions).
+
+manual equivalent: 'scw secret create name=<name>' then 'scw secret
+version create secret-id=<uuid> data=<value>'.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("secrets create")
@@ -40,10 +45,18 @@ func newSecretsRotateCmd() *cobra.Command {
 	var apps []string
 	cmd := &cobra.Command{
 		Use:   "rotate <name>",
-		Short: "push new version of a secret and redeploy affected apps",
-		Long: `deferred — see 'sabokit secrets --help' for the why.
+		Short: "push a new version of a secret and redeploy affected apps",
+		Long: `not yet implemented in v0.1.0.
 
-manual: 'scw secret version create' then
+planned behavior: resolve <name> → uuid, push a new version via
+'scw secret version create', then chain into
+'sabokit deploy --apps <apps> --rotate-secrets' so the affected apps pick
+up the new value without a manual redeploy.
+
+if --apps is omitted, no redeploy is run (you push the version, then
+decide what to redeploy yourself).
+
+manual equivalent: 'scw secret version create secret-id=<uuid> ...' then
 'sabokit deploy --apps <X> --rotate-secrets'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
