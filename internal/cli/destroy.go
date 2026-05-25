@@ -13,6 +13,18 @@ func newDestroyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "terraform destroy (per-app, per-layer, or full)",
+		Long: `not yet implemented in v0.1.0 — destroy is a manual terraform operation
+for now.
+
+planned behavior:
+  --apps X[,Y]   terraform destroy -target=module.<app> for each named app
+  --layer L      destroy a whole layer (base | identity | apps)
+  --all          destroy everything, apps → identity → base, with prompt
+
+exactly one of --apps, --layer, --all is required.
+
+manual equivalent for v0.1.0: run terraform destroy directly against the
+relevant layer inside the runner image.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			modes := 0
 			if len(apps) > 0 {

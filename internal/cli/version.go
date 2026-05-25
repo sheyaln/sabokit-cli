@@ -12,6 +12,13 @@ func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "print binary version and default runner image",
+		Long: `prints two lines:
+  sabokit <semver>            — binary version, injected via ldflag at build time
+  runner  <repo>:<tag>        — default runner image used unless --image overrides
+
+dev builds report 'sabokit 0.1.0-dev'. release builds report the tag that
+triggered the workflow (eg. 'sabokit 0.1.0').`,
+		Example: `  sabokit version`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("sabokit %s\nrunner %s:%s\n", Version, DefaultRunnerImage, DefaultRunnerTag)
 			return nil

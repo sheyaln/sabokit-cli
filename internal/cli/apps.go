@@ -14,6 +14,12 @@ func newAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apps",
 		Short: "manage the project's apps manifest",
+		Long: `subcommands for inspecting and editing apps-manifest.yaml — the file that
+tells sabokit which apps exist for the project and which host runs each.
+
+"available" means listed in the manifest at all. "enabled" means
+enabled: true. 'apps remove' toggles enabled to false; it does not delete
+the entry.`,
 	}
 	cmd.AddCommand(newAppsListCmd(), newAppsAddCmd(), newAppsRemoveCmd())
 	return cmd
@@ -24,6 +30,17 @@ func newAppsListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "list apps in the project manifest (available + enabled)",
+		Long: `tabular view of apps-manifest.yaml with columns NAME, ENABLED, HOST.
+sorted by name. '-' in the HOST column means no host is set for that app.
+
+this lists what's in the project's manifest. it does NOT enumerate the
+universe of apps the runner image knows how to deploy — for that you'd
+need to inspect the image's role catalog directly.`,
+		Example: `  # all apps with their enabled status
+  sabokit apps list
+
+  # only currently-enabled apps
+  sabokit apps list --enabled`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAppsList(enabledOnly)
 		},
@@ -66,7 +83,12 @@ func newAppsAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add <name>",
 		Short: "add an app to apps-manifest.yaml and regenerate apps.tf",
-		Args:  cobra.ExactArgs(1),
+		Long: `not yet implemented in v0.1.0.
+
+planned behavior: append <name> to apps-manifest.yaml with enabled: true,
+prompt for a host, then run scripts/gen_apps_yml.py inside the runner
+image to regenerate apps.tf. prompts for terraform apply afterward.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("apps add")
 		},
@@ -77,7 +99,12 @@ func newAppsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <name>",
 		Short: "remove an app from apps-manifest.yaml",
-		Args:  cobra.ExactArgs(1),
+		Long: `not yet implemented in v0.1.0.
+
+planned behavior: toggle <name>'s enabled flag to false in
+apps-manifest.yaml, prompt for 'sabokit down --apps <name>', then prompt
+for terraform destroy of that app's resources.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("apps remove")
 		},

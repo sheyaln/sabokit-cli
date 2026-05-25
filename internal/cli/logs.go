@@ -18,7 +18,31 @@ func newLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <app>",
 		Short: "docker logs via SSH (container name defaults to app name)",
-		Args:  cobra.ExactArgs(1),
+		Long: `runs 'ssh <user>@<host> -- docker logs [-f] --tail N <container>' against
+the host that runs <app>.
+
+host resolution:
+  if --servers is set, uses that host(s) directly
+  otherwise reads apps-manifest.yaml and uses the app's 'host' field
+  errors if 0 or >1 hosts resolve — pass --servers to disambiguate
+
+container name defaults to the app name. override with --container if your
+deployment uses a different container name (eg. when docker compose
+suffixes the service name).
+
+does not require docker locally — ssh + remote docker only.`,
+		Example: `  # last 100 lines (default)
+  sabokit logs espocrm
+
+  # follow live, 500 lines of backfill
+  sabokit logs espocrm --tail 500 -f
+
+  # pick the host explicitly
+  sabokit logs authentik --servers app02
+
+  # override the container name
+  sabokit logs n8n --container n8n-worker-1`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLogs(args[0], servers, container, tail, follow)
 		},

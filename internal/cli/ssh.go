@@ -14,7 +14,18 @@ func newSSHCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh <host>",
 		Short: "ssh into a managed host",
-		Args:  cobra.ExactArgs(1),
+		Long: `passthrough to 'ssh <user>@<host>'. user comes from .sabokit/config.yml
+(ssh.user, defaults to root); the optional ssh.key is passed via -i.
+
+sabokit does not consult the inventory; <host> is whatever ssh can resolve
+— a hostname, an alias from your ~/.ssh/config, or a raw IP. uses
+syscall.Exec so your local shell is replaced by the ssh session (no
+sabokit process lingers in the parent chain).
+
+does not require docker.`,
+		Example: `  sabokit ssh app01
+  sabokit ssh edge.example.com`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSSH(args[0])
 		},

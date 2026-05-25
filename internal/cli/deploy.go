@@ -26,6 +26,34 @@ func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "run ansible against the project (ports fc-runner.sh flag shape)",
+		Long: `runs ansible-playbook deploy.yml inside the runner image with the project
+directory mounted at /workspace. the playbook lives in the image at
+/platform/ansible/deploy.yml — sabokit does not ship it.
+
+flag semantics:
+  --apps         limits ansible --tags to the given app names
+  --servers      limits ansible --limit to the given hosts
+  --base         forces inclusion of base host roles (-e include_base=true)
+  --no-base      skips base host roles (-e include_base=false)
+                   --base and --no-base are mutually exclusive
+  --rotate-secrets  passes -e rotate_secrets=true (forces secret re-pull)
+  --check        ansible --check, no changes applied
+  --overlay F    extra -i inventory file (path relative to project root)
+  --print        print the docker invocation and exit (no docker required)
+
+requires docker live (unless --print). default runner image is pinned via
+--image; verbose mode (-v) maps to ansible -v.`,
+		Example: `  # full deploy across all hosts
+  sabokit deploy
+
+  # deploy a single app to a single host, dry-run
+  sabokit deploy --apps espocrm --servers app01 --check
+
+  # rotate secrets and redeploy two apps
+  sabokit deploy --apps espocrm,authentik --rotate-secrets
+
+  # see the docker invocation without running it
+  sabokit deploy --apps espocrm --print`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if f.base && f.noBase {
 				return fmt.Errorf("--base and --no-base are mutually exclusive")

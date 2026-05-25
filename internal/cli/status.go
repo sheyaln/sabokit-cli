@@ -19,6 +19,27 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "terraform output + container state per host",
+		Long: `prints two sections:
+
+  1. terraform outputs — runs 'terraform output -json' inside the runner
+     image for each layer in order: base, identity, apps. uninitialized
+     layers are shown as <not initialized>. sensitive outputs are masked.
+
+  2. container state — runs 'ansible all -m shell -a "docker ps ..."' over
+     ssh against the project inventory. --servers passes through to
+     ansible --limit. --apps post-filters the container listing by name
+     (does NOT filter the terraform section).
+
+requires docker live. ssh transport runs inside the runner image; the
+project's ssh key (from .sabokit/config.yml) is mounted read-only.`,
+		Example: `  # full status across all layers and hosts
+  sabokit status
+
+  # narrow to one host
+  sabokit status --servers app01
+
+  # show only containers whose name contains 'espocrm' or 'authentik'
+  sabokit status --apps espocrm,authentik`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStatus(apps, servers)
 		},

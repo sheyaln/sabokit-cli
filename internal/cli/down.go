@@ -16,6 +16,24 @@ func newDownCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "down",
 		Short: "stop apps (docker compose down) without destroying cloud resources",
+		Long: `runs ansible-playbook down.yml --tags <apps> inside the runner image. each
+named app's containers are stopped via docker compose down on the host
+running it. cloud resources (instances, dns, secrets, TF state) are not
+touched. reversible via 'sabokit deploy --apps <same>'.
+
+--apps is required; pass one or more app names. --servers narrows ansible
+--limit to specific hosts (useful when an app is split across hosts).
+
+requires the sabokit-runner v3.0.0+ image (down.yml does not exist in older
+runner builds).`,
+		Example: `  # stop one app on all hosts that run it
+  sabokit down --apps espocrm
+
+  # stop multiple apps, restricted to one host
+  sabokit down --apps espocrm,n8n --servers app01
+
+  # preview the docker invocation
+  sabokit down --apps espocrm --print`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(apps) == 0 {
 				return fmt.Errorf("--apps is required")
