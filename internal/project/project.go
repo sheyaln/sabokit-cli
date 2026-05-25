@@ -92,6 +92,28 @@ type appEntry struct {
 	Host    string `yaml:"host"`
 }
 
+type App struct {
+	Name    string
+	Enabled bool
+	Host    string
+}
+
+func (p *Project) AllApps() ([]App, error) {
+	data, err := os.ReadFile(p.AppsManifestPath())
+	if err != nil {
+		return nil, fmt.Errorf("read apps manifest: %w", err)
+	}
+	var m appsManifest
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parse apps manifest: %w", err)
+	}
+	out := make([]App, 0, len(m.Apps))
+	for name, e := range m.Apps {
+		out = append(out, App{Name: name, Enabled: e.Enabled, Host: e.Host})
+	}
+	return out, nil
+}
+
 func (p *Project) HostsForApp(name string) ([]string, error) {
 	data, err := os.ReadFile(p.AppsManifestPath())
 	if err != nil {

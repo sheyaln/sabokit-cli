@@ -28,6 +28,7 @@ binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override 
 | `sabokit ssh <host>` | passthrough to `ssh <user>@<host>` |
 | `sabokit logs <app> [--servers H] [--container C] [--tail N] [-f]` | `docker logs` over ssh |
 | `sabokit secrets create/rotate` | scaleway secret operations — not yet implemented |
+| `sabokit apps list [--enabled]` | tabular list of apps in apps-manifest.yaml (NAME, ENABLED, HOST) |
 | `sabokit apps add/remove` | edit apps-manifest.yaml + regenerate apps.tf — not yet implemented |
 | `sabokit version` | binary version + default runner image |
 
