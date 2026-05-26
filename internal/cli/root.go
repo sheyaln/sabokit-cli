@@ -9,11 +9,14 @@ import (
 const (
 	DefaultRunnerImage = "ghcr.io/sheyaln/sabokit-runner"
 	DefaultRunnerTag   = "v3.0.0"
+	DefaultScwImage    = "scaleway/cli:2.56"
 )
 
 type GlobalFlags struct {
-	Image   string
-	Verbose bool
+	Image    string
+	ScwImage string
+	Platform string
+	Verbose  bool
 }
 
 var globals GlobalFlags
@@ -23,11 +26,19 @@ func NewRootCmd() *cobra.Command {
 	if env := os.Getenv("SABOKIT_IMAGE"); env != "" {
 		defaultImage = env
 	}
+	defaultPlatform := os.Getenv("SABOKIT_PLATFORM")
+	defaultScwImage := DefaultScwImage
+	if env := os.Getenv("SABOKIT_SCW_IMAGE"); env != "" {
+		defaultScwImage = env
+	}
 
 	cmd := &cobra.Command{
 		Use:     "sabokit",
 		Version: Version,
 		Short:   "deploy and operate federated-commons stacks",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			cmd.SilenceUsage = true
+		},
 		Long: `sabokit orchestrates the sabokit-runner image to provision and manage
 federated-commons stacks on scaleway. it is a thin orchestrator: terraform
 and ansible run inside the runner image, sabokit shells out to docker.
@@ -40,7 +51,9 @@ a sabokit project is any directory containing .sabokit/config.yml. sabokit
 walks up from cwd to find it. see README.md for the config schema.
 
 env vars:
-  SABOKIT_IMAGE                       overrides --image default (repository:tag)
+  SABOKIT_IMAGE                       overrides --image default (runner for ansible/terraform)
+  SABOKIT_SCW_IMAGE                   overrides --scw-image default (scaleway cli for secrets ops)
+  SABOKIT_PLATFORM                    sets docker --platform (eg. linux/amd64 on arm64 hosts)
 
 passed through to the runner image:
   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_PROJECT_ID,
@@ -53,7 +66,9 @@ passed through to the runner image:
 		SilenceErrors: false,
 	}
 
-	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref (repository:tag); env: SABOKIT_IMAGE")
+	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref for ansible/terraform (repository:tag); env: SABOKIT_IMAGE")
+	cmd.PersistentFlags().StringVar(&globals.ScwImage, "scw-image", defaultScwImage, "scaleway cli image ref for secrets ops; env: SABOKIT_SCW_IMAGE")
+	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override (eg. linux/amd64); env: SABOKIT_PLATFORM")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")
 
 	cmd.AddCommand(

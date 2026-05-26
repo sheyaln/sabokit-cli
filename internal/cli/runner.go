@@ -31,6 +31,7 @@ func baseInvocation(p *project.Project) docker.Invocation {
 	}
 	return docker.Invocation{
 		Image:       globals.Image,
+		Platform:    globals.Platform,
 		Mounts:      mounts,
 		Env:         env,
 		EnvPassthru: []string{"SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_PROJECT_ID", "SCW_DEFAULT_ORGANIZATION_ID", "SCW_DEFAULT_REGION", "SCW_DEFAULT_ZONE"},
