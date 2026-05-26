@@ -63,12 +63,16 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | `sabokit status [--apps X] [--servers Y]` | terraform outputs per layer + `docker ps` across hosts |
 | `sabokit ssh <host>` | passthrough to `ssh <user>@<host>` |
 | `sabokit logs <app> [--servers H] [--container C] [--tail N] [-f]` | `docker logs` over ssh |
-| `sabokit secrets create/rotate` | scaleway secret operations — not yet implemented |
+| `sabokit secrets list/get/versions/create/rotate/delete` | name-first scaleway secret management — collapses uuid lookups + base64 decoding |
 | `sabokit apps list [--enabled]` | tabular list of apps in apps-manifest.yaml (NAME, ENABLED, HOST) |
 | `sabokit apps add/remove` | edit apps-manifest.yaml + regenerate apps.tf — not yet implemented |
 | `sabokit version` | binary version + default runner image |
 
-global flags: `--image <repo:tag>` (default `ghcr.io/sheyaln/sabokit-runner:v3.0.0`), `-v/--verbose`.
+global flags:
+- `--image <repo:tag>` (default `ghcr.io/sheyaln/sabokit-runner:v3.0.0`) — runner image for ansible/terraform; env `SABOKIT_IMAGE`
+- `--scw-image <repo:tag>` (default `scaleway/cli:2.56`) — official scaleway cli image used for `secrets *`; env `SABOKIT_SCW_IMAGE`
+- `--platform <p>` — docker `--platform` override (eg. `linux/amd64` on arm64 hosts when an image is amd64-only); env `SABOKIT_PLATFORM`
+- `-v/--verbose`
 
 most runner-backed commands accept `--print` to print the `docker run` invocation without executing it.
 
@@ -103,4 +107,4 @@ apps:
 
 ## status
 
-beta. v0.1.0 ships `deploy`/`down`/`status`/`ssh`/`logs`/`version`. `init`/`up`/`destroy`/`secrets`/`apps` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks; against the older `federated-commons-runner:v2.17.0` image, `deploy` works but `down` and parts of `status` won't.
+beta. v0.2.0 ships `deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `init`/`up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.

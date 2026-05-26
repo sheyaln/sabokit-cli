@@ -109,6 +109,17 @@ prerequisites:
     sabokit ssh app01                  # shell into the host
     sabokit down --apps espocrm        # stop the containers (needs v3.0.0)
 
+12. manage secrets (uses official scaleway/cli image, independent of runner)
+    ------------------------------------------------------------------------
+    sabokit secrets list                            # clean 4-col table
+    sabokit secrets list --tag authentik            # filter by tag
+    sabokit secrets get db-password                 # plaintext to stdout
+    sabokit secrets versions db-password            # version history
+    sabokit secrets create api-key 'val' --tag foo  # create + push v1
+    sabokit secrets rotate db-password 'new-val' --apps espocrm
+                                                    # push + redeploy
+    sabokit secrets delete old-key                  # confirm prompt
+
 troubleshooting:
   - "no .sabokit/config.yml found"  → you're not inside the project dir
   - "docker daemon not reachable"   → start docker desktop / dockerd
