@@ -12,39 +12,30 @@ binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override 
 
 ## quickstart
 
-`sabokit init` is a stub in v0.1.0, so first-time setup is manual:
-
 ```bash
-mkdir my-stack && cd my-stack && mkdir .sabokit
+sabokit init my-stack --base-domain example.com   # scaffolds from consumer-template
 
-cat > .sabokit/config.yml <<'EOF'
-project: my-stack
-scaleway: {region: fr-par, zone: fr-par-1}
-ssh: {user: root, key: ~/.ssh/id_ed25519}
-EOF
-
-cat > apps-manifest.yaml <<'EOF'
-apps:
-  espocrm: {enabled: true, host: app01}
-EOF
-
-cat > inventory.ini <<'EOF'
-[all]
-app01 ansible_host=51.x.x.x
-EOF
+cd my-stack
 
 export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
-
-# default image is v3.0.0 (not yet published) — point at the older runner:
+# default runner image v3.0.0 is not yet published — point at the older one:
 export SABOKIT_IMAGE=ghcr.io/sheyaln/federated-commons-runner:v2.17.0
+# arm64 hosts also need:
+export SABOKIT_PLATFORM=linux/amd64
 
-sabokit apps list                                       # verify config parses
-sabokit deploy --apps espocrm --servers app01 --print   # see the docker invocation
-sabokit deploy --apps espocrm --servers app01 --check   # ansible dry-run
-sabokit deploy --apps espocrm --servers app01           # for real
+sabokit secrets list                              # works independently
+sabokit apps list
+
+# per-env setup (consumer-template's own flow):
+cp -r environments/_template environments/prod
+cd environments/prod
+cp terraform.tfvars.example terraform.tfvars && $EDITOR terraform.tfvars
+cp backend.hcl.example backend.hcl && $EDITOR backend.hcl
+cp inventory.ini.example inventory.ini
+./preflight.sh && ./up.sh && ./configure.sh
 ```
 
-run `sabokit quickstart` for the full walkthrough with troubleshooting.
+run `sabokit quickstart` for the full walkthrough with troubleshooting and the architectural caveats.
 
 ## requires
 
@@ -55,7 +46,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 
 | command | what |
 | --- | --- |
-| `sabokit init <name>` | scaffold a consumer project — not yet implemented |
+| `sabokit init <name> [--base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, write `.sabokit/config.yml` |
 | `sabokit up [--apps X]` | terraform base+identity+apps then ansible deploy — not yet implemented |
 | `sabokit deploy [--apps X --servers Y --base/--no-base --rotate-secrets --check --overlay F]` | ansible-playbook deploy.yml inside runner image |
 | `sabokit down --apps X [--servers Y]` | ansible-playbook down.yml — stop containers, leave cloud resources |
@@ -107,4 +98,6 @@ apps:
 
 ## status
 
-beta. v0.2.0 ships `deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `init`/`up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.
+beta. v0.1.3 ships `init`/`deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.
+
+known architectural gap: `sabokit-cli`'s project model assumes flat root (one `inventory.ini`, `apps-manifest.yaml` at root); consumer-template uses per-env dirs (`environments/<env>/inventory.ini`). `init` produces consumer-template's layout, but `deploy`/`status` won't fully match until sabokit-cli grows env-aware paths. Tracked.
