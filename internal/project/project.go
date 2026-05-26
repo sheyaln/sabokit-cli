@@ -15,6 +15,7 @@ const (
 
 type Config struct {
 	Project      string   `yaml:"project"`
+	BaseDomain   string   `yaml:"base_domain"`
 	Scaleway     Scaleway `yaml:"scaleway"`
 	SSH          SSH      `yaml:"ssh"`
 	Inventory    string   `yaml:"inventory"`

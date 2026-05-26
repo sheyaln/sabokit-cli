@@ -1,29 +1,191 @@
 package cli
 
 import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/sheyaln/sabokit-cli/internal/template"
 	"github.com/spf13/cobra"
 )
 
+type initFlags struct {
+	templateRepo  string
+	templateTag   string
+	baseDomain    string
+	region        string
+	zone          string
+	sshUser       string
+	sshKey        string
+	nonInteractive bool
+}
+
 func newInitCmd() *cobra.Command {
-	return &cobra.Command{
+	f := &initFlags{}
+	cmd := &cobra.Command{
 		Use:   "init <project-name>",
 		Short: "scaffold a new consumer project",
-		Long: `not yet implemented in v0.1.0.
+		Long: `clones consumer-template/ from the upstream sabokit repo at a pinned tag
+and copies it into <project-name>/. then prompts for project metadata
+(or accepts flags) and writes .sabokit/config.yml at the project root.
 
-planned behavior: fetch consumer-template/ from the federated-commons repo
-at a pinned tag (git clone --depth 1 --branch <tag>) and render it into a
-new directory named <project-name>. interactive prompts for org name, base
-domain, scaleway region, ssh key path, etc. writes .sabokit/config.yml,
-terraform.tfvars, inventory.ini, and apps-manifest.yaml.
+defaults:
+  --from-template-repo  https://github.com/sheyaln/sabokit
+  --from-template-tag   ` + template.DefaultTag + `
+  --region              fr-par
+  --ssh-user            root
+  --ssh-key             ~/.ssh/id_ed25519
 
-the pinned tag matches sabokit's default runner image tag; override with
---from-template-tag once the flag exists.
+set --non-interactive to skip prompts (all other required values must be
+passed as flags). consumer-template is fetched fresh via 'git clone
+--depth 1 --branch <tag>'; the .git directory is stripped from the result.
 
-manual equivalent for v0.1.0: copy consumer-template/ from
-federated-commons yourself and edit the files by hand.`,
+next steps after init are printed at the end and follow consumer-template's
+own README (cp environments/_template environments/prod, fill in tfvars,
+run preflight/up/configure).`,
+		Example: `  sabokit init my-stack
+  sabokit init my-stack --base-domain example.com --region nl-ams
+  sabokit init my-stack --non-interactive --base-domain example.com`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented("init")
+			return runInit(args[0], f)
 		},
 	}
+	cmd.Flags().StringVar(&f.templateRepo, "from-template-repo", template.DefaultRepo, "git repo to clone consumer-template from")
+	cmd.Flags().StringVar(&f.templateTag, "from-template-tag", template.DefaultTag, "tag/branch to clone")
+	cmd.Flags().StringVar(&f.baseDomain, "base-domain", "", "base domain for the stack (eg. example.com)")
+	cmd.Flags().StringVar(&f.region, "region", "fr-par", "scaleway region")
+	cmd.Flags().StringVar(&f.zone, "zone", "", "scaleway zone (default: <region>-1)")
+	cmd.Flags().StringVar(&f.sshUser, "ssh-user", "root", "ssh user for ansible / sabokit ssh")
+	cmd.Flags().StringVar(&f.sshKey, "ssh-key", "~/.ssh/id_ed25519", "ssh key path (sabokit will mount this into the runner)")
+	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "skip prompts; require all values via flags")
+	return cmd
+}
+
+func runInit(projectName string, f *initFlags) error {
+	if err := validateProjectName(projectName); err != nil {
+		return err
+	}
+	target, err := filepath.Abs(projectName)
+	if err != nil {
+		return err
+	}
+	if err := ensureTargetReady(target); err != nil {
+		return err
+	}
+
+	if err := resolveInitInputs(f); err != nil {
+		return err
+	}
+
+	fmt.Printf("cloning %s @ %s\n", f.templateRepo, f.templateTag)
+	src, err := template.Fetch(template.FetchOptions{Repo: f.templateRepo, Tag: f.templateTag})
+	if err != nil {
+		return err
+	}
+	defer template.CleanupParent(src)
+
+	fmt.Printf("copying consumer-template/ → %s\n", target)
+	if err := template.CopyTree(src, target); err != nil {
+		return err
+	}
+
+	if err := writeProjectConfig(target, projectName, f); err != nil {
+		return err
+	}
+
+	fmt.Printf("\ndone. next steps:\n")
+	fmt.Printf("  cd %s\n", projectName)
+	fmt.Printf("  cp -r environments/_template environments/prod\n")
+	fmt.Printf("  cd environments/prod\n")
+	fmt.Printf("  cp terraform.tfvars.example terraform.tfvars && $EDITOR terraform.tfvars\n")
+	fmt.Printf("  cp backend.hcl.example      backend.hcl      && $EDITOR backend.hcl\n")
+	fmt.Printf("  cp inventory.ini.example    inventory.ini\n")
+	fmt.Printf("  ./preflight.sh && ./up.sh && ./configure.sh\n")
+	fmt.Printf("\nsee %s/README.md and environments/_template/README.md for detail.\n", projectName)
+	return nil
+}
+
+func validateProjectName(name string) error {
+	if name == "" {
+		return fmt.Errorf("project name is required")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("project name must not contain path separators: %q", name)
+	}
+	return nil
+}
+
+func ensureTargetReady(target string) error {
+	fi, err := os.Stat(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("target %s exists and is not a directory", target)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("target %s exists and is not empty", target)
+	}
+	return nil
+}
+
+func resolveInitInputs(f *initFlags) error {
+	if f.nonInteractive {
+		if f.baseDomain == "" {
+			return fmt.Errorf("--base-domain is required in --non-interactive mode")
+		}
+	} else {
+		r := bufio.NewReader(os.Stdin)
+		if f.baseDomain == "" {
+			f.baseDomain = prompt(r, "base domain (eg. example.com): ", "")
+		}
+		f.region = prompt(r, fmt.Sprintf("scaleway region [%s]: ", f.region), f.region)
+		f.sshUser = prompt(r, fmt.Sprintf("ssh user [%s]: ", f.sshUser), f.sshUser)
+		f.sshKey = prompt(r, fmt.Sprintf("ssh key path [%s]: ", f.sshKey), f.sshKey)
+	}
+	if f.baseDomain == "" {
+		return fmt.Errorf("base domain is required")
+	}
+	if f.zone == "" {
+		f.zone = f.region + "-1"
+	}
+	return nil
+}
+
+func prompt(r *bufio.Reader, label, fallback string) string {
+	fmt.Print(label)
+	line, _ := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return fallback
+	}
+	return line
+}
+
+func writeProjectConfig(target, projectName string, f *initFlags) error {
+	dir := filepath.Join(target, ".sabokit")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "config.yml")
+	content := fmt.Sprintf(`project: %s
+base_domain: %s
+scaleway:
+  region: %s
+  zone: %s
+ssh:
+  user: %s
+  key: %s
+`, projectName, f.baseDomain, f.region, f.zone, f.sshUser, f.sshKey)
+	return os.WriteFile(path, []byte(content), 0o644)
 }
