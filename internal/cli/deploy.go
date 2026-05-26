@@ -26,9 +26,10 @@ func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "run ansible against the project (ports fc-runner.sh flag shape)",
-		Long: `runs ansible-playbook deploy.yml inside the runner image with the project
-directory mounted at /workspace. the playbook lives in the image at
-/platform/ansible/deploy.yml — sabokit does not ship it.
+		Long: `runs ansible-playbook site.yml inside the runner image with the project
+directory mounted at /workspace. site.yml is the umbrella (bootstrap + apps)
+and lives in the image at /platform/ansible/site.yml — sabokit does not
+ship it.
 
 flag semantics:
   --apps         limits ansible --tags to the given app names
@@ -79,7 +80,7 @@ func runDeploy(f *deployFlags) error {
 	}
 
 	cmd := []string{
-		"deploy.yml",
+		"site.yml",
 		"-i", filepath.Join(containerWorkspace, p.Config.Inventory),
 	}
 	if len(f.apps) > 0 {
