@@ -16,6 +16,7 @@ func TestArgsMinimal(t *testing.T) {
 func TestArgsFull(t *testing.T) {
 	inv := Invocation{
 		Image:      "img:v1",
+		Platform:   "linux/amd64",
 		Workdir:    "/work",
 		Entrypoint: "ansible-playbook",
 		Cmd:        []string{"deploy.yml", "--tags", "espocrm"},
@@ -29,7 +30,9 @@ func TestArgsFull(t *testing.T) {
 	}
 	got := inv.Args()
 	want := []string{
-		"run", "--rm", "-it", "--network", "host",
+		"run", "--rm",
+		"--platform", "linux/amd64",
+		"-it", "--network", "host",
 		"-w", "/work",
 		"-v", "/host/work:/work",
 		"-v", "/host/keys:/keys:ro",

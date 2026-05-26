@@ -15,6 +15,7 @@ type Mount struct {
 
 type Invocation struct {
 	Image       string
+	Platform    string
 	Workdir     string
 	Entrypoint  string
 	Cmd         []string
@@ -27,6 +28,9 @@ type Invocation struct {
 
 func (i Invocation) Args() []string {
 	args := []string{"run", "--rm"}
+	if i.Platform != "" {
+		args = append(args, "--platform", i.Platform)
+	}
 	if i.TTY {
 		args = append(args, "-it")
 	}
