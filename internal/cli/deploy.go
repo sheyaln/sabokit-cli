@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,7 +16,6 @@ type deployFlags struct {
 	apps          []string
 	servers       []string
 	base          bool
-	noBase        bool
 	rotateSecrets bool
 	check         bool
 	overlay       string
@@ -25,50 +26,50 @@ func newDeployCmd() *cobra.Command {
 	f := &deployFlags{}
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "run ansible against the project (ports fc-runner.sh flag shape)",
-		Long: `runs ansible-playbook site.yml inside the runner image with the project
-directory mounted at /workspace. site.yml is the umbrella (bootstrap + apps)
-and lives in the image at /platform/ansible/site.yml — sabokit does not
-ship it.
+		Short: "run ansible against the project (apps.yml by default; site.yml with --base)",
+		Long: `runs an ansible playbook inside the runner image against the current env.
+mounts the env dir at /workspace and uses inventory.ini from there.
+
+playbook selection:
+  default       /platform/ansible/apps.yml   — apps only, fast redeploy
+  --base        /platform/ansible/site.yml   — bootstrap + apps (first-time)
+
+env vars passed to ansible (auto, from the env dir):
+  -e @/workspace/.ansible-vars.json (if present)
+  -e env_name=<env>
+  -e gateway_domain=<extracted from .ansible-vars.json's authentik_gateway_domain>
 
 flag semantics:
   --apps         limits ansible --tags to the given app names
   --servers      limits ansible --limit to the given hosts
-  --base         forces inclusion of base host roles (-e include_base=true)
-  --no-base      skips base host roles (-e include_base=false)
-                   --base and --no-base are mutually exclusive
-  --rotate-secrets  passes -e rotate_secrets=true (forces secret re-pull)
+  --rotate-secrets   passes -e rotate_secrets=true (forces secret re-pull)
   --check        ansible --check, no changes applied
-  --overlay F    extra -i inventory file (path relative to project root)
-  --print        print the docker invocation and exit (no docker required)
-
-requires docker live (unless --print). default runner image is pinned via
---image; verbose mode (-v) maps to ansible -v.`,
-		Example: `  # full deploy across all hosts
+  --overlay F    extra -i inventory file (path inside the env dir)
+  --print        print the docker invocation and exit (no docker required)`,
+		Example: `  # apps-only redeploy of the env's default app set
   sabokit deploy
 
-  # deploy a single app to a single host, dry-run
+  # one app, one host, dry-run
   sabokit deploy --apps espocrm --servers app01 --check
 
-  # rotate secrets and redeploy two apps
-  sabokit deploy --apps espocrm,authentik --rotate-secrets
+  # first-time deploy (bootstrap + apps)
+  sabokit deploy --base
 
-  # see the docker invocation without running it
+  # secret rotation chain
+  sabokit deploy --apps espocrm --rotate-secrets
+
+  # see the docker invocation
   sabokit deploy --apps espocrm --print`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if f.base && f.noBase {
-				return fmt.Errorf("--base and --no-base are mutually exclusive")
-			}
 			return runDeploy(f)
 		},
 	}
 	cmd.Flags().StringSliceVar(&f.apps, "apps", nil, "restrict to specific apps (ansible --tags)")
 	cmd.Flags().StringSliceVar(&f.servers, "servers", nil, "restrict to specific hosts (ansible --limit)")
-	cmd.Flags().BoolVar(&f.base, "base", false, "include base host roles")
-	cmd.Flags().BoolVar(&f.noBase, "no-base", false, "skip base host roles")
+	cmd.Flags().BoolVar(&f.base, "base", false, "run site.yml (bootstrap + apps) instead of apps.yml")
 	cmd.Flags().BoolVar(&f.rotateSecrets, "rotate-secrets", false, "force re-pull of secrets")
 	cmd.Flags().BoolVar(&f.check, "check", false, "ansible --check (dry run)")
-	cmd.Flags().StringVar(&f.overlay, "overlay", "", "extra inventory overlay file (relative to project)")
+	cmd.Flags().StringVar(&f.overlay, "overlay", "", "extra inventory overlay file (relative to env dir)")
 	cmd.Flags().BoolVar(&f.dryRun, "print", false, "print the docker invocation without running it")
 	return cmd
 }
@@ -78,11 +79,31 @@ func runDeploy(f *deployFlags) error {
 	if err != nil {
 		return err
 	}
+	inv, err := buildDeployInvocation(p, f)
+	if err != nil {
+		return err
+	}
+	if f.dryRun {
+		fmt.Println("docker", strings.Join(inv.Args(), " "))
+		return nil
+	}
+	if err := docker.Preflight(); err != nil {
+		return err
+	}
+	return inv.Command().Run()
+}
+
+func buildDeployInvocation(p *project.Project, f *deployFlags) (docker.Invocation, error) {
+	playbook := "apps.yml"
+	if f.base {
+		playbook = "site.yml"
+	}
 
 	cmd := []string{
-		"site.yml",
-		"-i", filepath.Join(containerWorkspace, p.Config.Inventory),
+		playbook,
+		"-i", containerWorkspace + "/" + p.Config.Inventory,
 	}
+	cmd = appendEnvExtraVars(cmd, p, globals.Env)
 	if len(f.apps) > 0 {
 		cmd = append(cmd, "--tags", strings.Join(f.apps, ","))
 	}
@@ -95,12 +116,6 @@ func runDeploy(f *deployFlags) error {
 	if f.overlay != "" {
 		cmd = append(cmd, "-i", filepath.Join(containerWorkspace, f.overlay))
 	}
-	switch {
-	case f.base:
-		cmd = append(cmd, "-e", "include_base=true")
-	case f.noBase:
-		cmd = append(cmd, "-e", "include_base=false")
-	}
 	if f.rotateSecrets {
 		cmd = append(cmd, "-e", "rotate_secrets=true")
 	}
@@ -108,17 +123,53 @@ func runDeploy(f *deployFlags) error {
 		cmd = append(cmd, "-v")
 	}
 
-	inv := baseInvocation(p)
+	inv, err := baseInvocation(p)
+	if err != nil {
+		return docker.Invocation{}, err
+	}
 	inv.Workdir = playbookDir
 	inv.Entrypoint = "ansible-playbook"
 	inv.Cmd = cmd
+	return inv, nil
+}
 
-	if f.dryRun {
-		fmt.Println("docker", strings.Join(inv.Args(), " "))
-		return nil
+// appendEnvExtraVars adds -e flags ansible playbooks expect when running
+// against a consumer-template env: env_name, gateway_domain, and the
+// .ansible-vars.json bundle. Skips silently if no env is set or the
+// vars file doesn't exist yet (eg. before up.sh has run).
+func appendEnvExtraVars(cmd []string, p *project.Project, envOverride string) []string {
+	envName := p.EnvName(envOverride)
+	if envName == "" {
+		return cmd
 	}
-	if err := docker.Preflight(); err != nil {
-		return err
+	cmd = append(cmd, "-e", "env_name="+envName)
+	varsPath := p.AnsibleVarsPath(envOverride)
+	if varsPath == "" {
+		return cmd
 	}
-	return inv.Command().Run()
+	if _, err := os.Stat(varsPath); err != nil {
+		return cmd
+	}
+	cmd = append(cmd, "-e", "@"+containerWorkspace+"/.ansible-vars.json")
+	if gateway, ok := readAnsibleVarGatewayDomain(varsPath); ok {
+		cmd = append(cmd, "-e", "gateway_domain="+gateway)
+	}
+	return cmd
+}
+
+func readAnsibleVarGatewayDomain(path string) (string, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var v struct {
+		AuthentikGatewayDomain string `json:"authentik_gateway_domain"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", false
+	}
+	if v.AuthentikGatewayDomain == "" {
+		return "", false
+	}
+	return v.AuthentikGatewayDomain, true
 }
