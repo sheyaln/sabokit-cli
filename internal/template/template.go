@@ -65,6 +65,32 @@ func CleanupParent(srcPath string) {
 	}
 }
 
+// Clone clones the full repo at <tag> into <dest> (shallow). Used for the
+// FED_COMMONS_DIR sibling checkout sabokit up needs. Returns the dest path.
+func Clone(repo, tag, dest string) (string, error) {
+	if repo == "" {
+		repo = DefaultRepo
+	}
+	if tag == "" {
+		tag = DefaultTag
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", err
+	}
+	c := exec.Command("git",
+		"-c", "advice.detachedHead=false",
+		"clone", "--depth", "1", "--branch", tag, "--quiet",
+		repo, dest,
+	)
+	var stderr stderrBuf
+	c.Stdout = io.Discard
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		return "", fmt.Errorf("git clone %s @ %s: %w\n%s", repo, tag, err, stderr.String())
+	}
+	return dest, nil
+}
+
 // CopyTree copies everything under src into dst, preserving file modes.
 // Skips .git directories.
 func CopyTree(src, dst string) error {
