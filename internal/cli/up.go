@@ -24,6 +24,7 @@ import (
 )
 
 type upFlags struct {
+	skipPreflight bool
 	skipUp        bool
 	skipConfigure bool
 	backendConfig string
@@ -44,6 +45,10 @@ every step calls docker images directly:
   scw         scaleway/cli (--scw-image / SABOKIT_SCW_IMAGE)
 
 phases:
+  preflight:
+    0. verify config.tf/backend.hcl present + required keys non-empty;
+       SCW creds reach the project; ssh public key uploaded to scaleway
+       IAM keystore (uploaded automatically if missing).
   up:
     1. terraform init + apply (base + identity_bootstrap)
     2. write .tf-output.json
@@ -71,6 +76,7 @@ Scaleway provider and scw secret manager access.`,
 			return runUp(f)
 		},
 	}
+	cmd.Flags().BoolVar(&f.skipPreflight, "skip-preflight", false, "skip phase 0 (config + creds + ssh key checks)")
 	cmd.Flags().BoolVar(&f.skipUp, "skip-up", false, "skip phases 1-9 (up.sh equivalent)")
 	cmd.Flags().BoolVar(&f.skipConfigure, "skip-configure", false, "skip phases 10-13 (configure.sh equivalent)")
 	cmd.Flags().StringVar(&f.backendConfig, "backend-config", "backend.hcl", "backend config filename inside the env dir")
@@ -79,8 +85,8 @@ Scaleway provider and scw secret manager access.`,
 }
 
 func runUp(f *upFlags) error {
-	if f.skipUp && f.skipConfigure {
-		return fmt.Errorf("--skip-up and --skip-configure together would run nothing")
+	if f.skipPreflight && f.skipUp && f.skipConfigure {
+		return fmt.Errorf("--skip-preflight, --skip-up, and --skip-configure together would run nothing")
 	}
 	if err := docker.Preflight(); err != nil {
 		return err
@@ -100,6 +106,14 @@ func runUp(f *upFlags) error {
 
 	tfClient := tf.New(globals.TFImage, globals.Platform)
 	scwClient := scw.New(globals.ScwImage, globals.Platform)
+
+	if !f.skipPreflight {
+		if err := runPreflight(p, envName, envDir, scwClient); err != nil {
+			return err
+		}
+	} else {
+		phase("skipping preflight (--skip-preflight)")
+	}
 
 	if !f.skipUp {
 		if err := runUpPhases(p, envName, envDir, tfClient, scwClient, f); err != nil {
@@ -123,6 +137,74 @@ func runUp(f *upFlags) error {
 
 func phase(msg string) {
 	fmt.Printf("==> %s\n", msg)
+}
+
+// runPreflight verifies the env is in a state where `up` can succeed:
+// required files present, config.tf has the keys it needs, SCW creds
+// work, and the user's SSH public key is in the project's IAM keystore.
+// Mirrors the original preflight.sh sans the dep-install checks (those
+// don't apply in pure-Go mode — tools come from docker images).
+func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Client) error {
+	phase("0/13 preflight")
+
+	required := []string{"config.tf", "backend.hcl"}
+	for _, f := range required {
+		if _, err := os.Stat(filepath.Join(envDir, f)); err != nil {
+			return fmt.Errorf("preflight: %s/%s missing — copy from %s.example and edit", envDir, f, f)
+		}
+	}
+
+	rawConfig, err := os.ReadFile(filepath.Join(envDir, "config.tf"))
+	if err != nil {
+		return err
+	}
+	content := string(rawConfig)
+	requiredKeys := []string{"scaleway_project_id", "base_domain", "gateway_domain", "infra_email"}
+	for _, k := range requiredKeys {
+		if v := configtf.GetString(content, k); v == "" {
+			return fmt.Errorf("preflight: %s not set in config.tf — edit and re-run", k)
+		}
+	}
+	projectID := configtf.GetString(content, "scaleway_project_id")
+	baseDomain := configtf.GetString(content, "base_domain")
+	gateway := configtf.GetString(content, "gateway_domain")
+	if !strings.HasSuffix(gateway, "."+baseDomain) && gateway != baseDomain {
+		fmt.Fprintf(os.Stderr, "    warning: gateway_domain %q does not sit under base_domain %q — terraform may refuse to manage the A record\n", gateway, baseDomain)
+	}
+
+	if os.Getenv("SCW_ACCESS_KEY") == "" || os.Getenv("SCW_SECRET_KEY") == "" {
+		return fmt.Errorf("preflight: SCW_ACCESS_KEY and SCW_SECRET_KEY must be exported in the environment")
+	}
+
+	if err := scwClient.AccountProjectGet(projectID); err != nil {
+		return fmt.Errorf("preflight: scw cannot reach project %s with the current credentials: %w", projectID, err)
+	}
+
+	if err := ensureSSHKeyUploaded(p, envName, projectID, scwClient); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureSSHKeyUploaded reads the user's SSH public key and ensures it's
+// in the scaleway project's IAM keystore. The private key path comes from
+// .sabokit/config.yml's ssh.key — we append .pub for the public side.
+func ensureSSHKeyUploaded(p *project.Project, envName, projectID string, scwClient *scw.Client) error {
+	privPath := p.Config.SSH.Key
+	if privPath == "" {
+		privPath = "~/.ssh/id_ed25519"
+	}
+	pubPath := expandHome(privPath) + ".pub"
+	pub, err := os.ReadFile(pubPath)
+	if err != nil {
+		return fmt.Errorf("preflight: read %s: %w (generate with `ssh-keygen -t ed25519` or update .sabokit/config.yml ssh.key)", pubPath, err)
+	}
+	host, _ := os.Hostname()
+	name := fmt.Sprintf("sabokit-%s-%s", host, envName)
+	if err := scwClient.EnsureSSHKey(name, string(pub), projectID); err != nil {
+		return fmt.Errorf("preflight: upload ssh key to scaleway IAM: %w", err)
+	}
+	return nil
 }
 
 // runUpPhases runs phases 1-9: terraform apply (base+identity_bootstrap),
