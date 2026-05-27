@@ -28,6 +28,20 @@ import (
 	"strings"
 )
 
+// GetString extracts a top-level scalar from locals.config — the same
+// shape consumer-template's scripts read via awk. Works for any leaf
+// `key = "value"` line within the locals { config = {...} } block.
+// Returns empty string if not found.
+func GetString(content, key string) string {
+	re := regexp.MustCompile(`^[\s]*` + regexp.QuoteMeta(key) + `\s*=\s*"([^"]*)"`)
+	for _, line := range strings.Split(content, "\n") {
+		if m := re.FindStringSubmatch(line); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
 // AppStatus reports the current state of <name> within the config.tf apps
 // block.
 type AppStatus int

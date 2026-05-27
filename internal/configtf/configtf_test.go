@@ -31,6 +31,30 @@ const sample = `locals {
 }
 `
 
+func TestGetString(t *testing.T) {
+	tf := `locals {
+  config = {
+    scaleway_project_id = "abc-123"
+    base_domain         = "example.org"
+    gateway_domain      = "auth.example.org"
+    infra_email         = "ops@example.org"
+    # commented_key     = "ignored"
+  }
+}`
+	cases := []struct{ key, want string }{
+		{"scaleway_project_id", "abc-123"},
+		{"base_domain", "example.org"},
+		{"gateway_domain", "auth.example.org"},
+		{"infra_email", "ops@example.org"},
+		{"nonexistent", ""},
+	}
+	for _, tc := range cases {
+		if got := GetString(tf, tc.key); got != tc.want {
+			t.Errorf("GetString(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+}
+
 func TestFindApp(t *testing.T) {
 	cases := []struct {
 		name string
