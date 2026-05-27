@@ -229,6 +229,11 @@ terraform.tfstate.*
 # terraform plans (often contain secrets in the diff)
 *.tfplan
 
+# .tfvars is for plaintext secrets only — never commit them. operator-facing
+# config lives in config.tf (locals.config), not in .tfvars files.
+*.tfvars
+!*.tfvars.example
+
 # legacy sabokit cache from pre-2026.05 versions — safe to delete if present
 .sabokit/sabokit-repo/
 
@@ -405,10 +410,11 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// scaffoldEnv copies environments/_template into environments/<env> and
-// materialises config.tf + backend.hcl with prompted values substituted
-// in. inventory.ini is left as-is (the .example file) since `sabokit up`
-// regenerates inventory.ini from terraform output anyway.
+// scaffoldEnv copies environments/_template into environments/<env>,
+// materialises config.tf + backend.hcl from prompts, and strips dead
+// upstream artifacts that sabokit-cli has taken over (the legacy bash
+// orchestration and the misleading inventory.ini.example placeholder —
+// sabokit up writes the real inventory from terraform output).
 func scaffoldEnv(projectRoot, envName string, f *initFlags) error {
 	if strings.ContainsAny(envName, "/\\") {
 		return fmt.Errorf("env name must not contain path separators: %q", envName)
@@ -424,12 +430,35 @@ func scaffoldEnv(projectRoot, envName string, f *initFlags) error {
 	if err := template.CopyTree(src, dst); err != nil {
 		return err
 	}
-
+	if err := stripDeadEnvArtifacts(dst); err != nil {
+		return err
+	}
 	if err := materialiseConfigTF(dst, envName, f); err != nil {
 		return err
 	}
 	if err := materialiseBackendHCL(dst, envName, f); err != nil {
 		return err
+	}
+	return nil
+}
+
+// deadEnvArtifacts lists files copied from upstream consumer-template
+// that sabokit-cli has fully replaced. Kept as a named var so tests can
+// assert the list end-to-end.
+var deadEnvArtifacts = []string{
+	"inventory.ini.example", // sabokit up regenerates inventory.ini from TF output
+	"preflight.sh",          // sabokit up phase 0
+	"up.sh",                 // sabokit up phases 1-7
+	"configure.sh",          // sabokit up configure phases
+	"_lib.sh",               // shared helpers for the above scripts
+}
+
+func stripDeadEnvArtifacts(envDir string) error {
+	for _, name := range deadEnvArtifacts {
+		path := filepath.Join(envDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("strip %s: %w", name, err)
+		}
 	}
 	return nil
 }
