@@ -15,6 +15,7 @@ func newLogsCmd() *cobra.Command {
 	var tail int
 	var follow bool
 	var container string
+	var group string
 	cmd := &cobra.Command{
 		Use:   "logs <app>",
 		Short: "docker logs via SSH (container name defaults to app name)",
@@ -22,39 +23,36 @@ func newLogsCmd() *cobra.Command {
 the host that runs <app>.
 
 host resolution:
-  if --servers is set, uses that host(s) directly
-  otherwise reads apps-manifest.yaml and uses the app's 'host' field
-  errors if 0 or >1 hosts resolve — pass --servers to disambiguate
+  --servers <host>   explicit; bypasses inventory
+  otherwise          reads environments/<env>/inventory.ini and picks the
+                     single host in the --group group (default: apps).
+                     errors if 0 or >1 hosts resolve — pass --servers to
+                     disambiguate, or set a different --group (eg.
+                     'identity' for authentik).
 
-container name defaults to the app name. override with --container if your
-deployment uses a different container name (eg. when docker compose
-suffixes the service name).
+container name defaults to the app name. override with --container if
+your deployment uses a different name.
 
 does not require docker locally — ssh + remote docker only.`,
-		Example: `  # last 100 lines (default)
-  sabokit logs espocrm
-
-  # follow live, 500 lines of backfill
-  sabokit logs espocrm --tail 500 -f
-
-  # pick the host explicitly
-  sabokit logs authentik --servers app02
-
-  # override the container name
+		Example: `  sabokit logs espocrm
+  sabokit logs espocrm -f --tail 500
+  sabokit logs authentik --group identity
+  sabokit logs n8n --servers app01-prod
   sabokit logs n8n --container n8n-worker-1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogs(args[0], servers, container, tail, follow)
+			return runLogs(args[0], servers, container, group, tail, follow)
 		},
 	}
-	cmd.Flags().StringSliceVar(&servers, "servers", nil, "host to ssh into (overrides app's host from manifest)")
+	cmd.Flags().StringSliceVar(&servers, "servers", nil, "host to ssh into (bypasses inventory lookup)")
 	cmd.Flags().IntVar(&tail, "tail", 100, "lines to tail")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow log output")
 	cmd.Flags().StringVar(&container, "container", "", "container name (default: <app>)")
+	cmd.Flags().StringVar(&group, "group", "apps", "ansible group to resolve host from (used when --servers not set)")
 	return cmd
 }
 
-func runLogs(app string, servers []string, container string, tail int, follow bool) error {
+func runLogs(app string, servers []string, container, group string, tail int, follow bool) error {
 	p, err := project.Load()
 	if err != nil {
 		return err
@@ -62,16 +60,16 @@ func runLogs(app string, servers []string, container string, tail int, follow bo
 
 	hosts := servers
 	if len(hosts) == 0 {
-		hosts, err = p.HostsForApp(app)
+		hosts, err = resolveHostsFromInventory(p, group)
 		if err != nil {
 			return err
 		}
 	}
 	if len(hosts) == 0 {
-		return fmt.Errorf("no host resolved for app %q — set 'host' in apps-manifest or pass --servers", app)
+		return fmt.Errorf("no host resolved for app %q in group %q — pass --servers to pick one", app, group)
 	}
 	if len(hosts) > 1 {
-		return fmt.Errorf("app %q maps to multiple hosts %v — pass --servers to pick one", app, hosts)
+		return fmt.Errorf("multiple hosts in group %q: %v — pass --servers to disambiguate", group, hosts)
 	}
 	host := hosts[0]
 
@@ -101,4 +99,11 @@ func runLogs(app string, servers []string, container string, tail int, follow bo
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func resolveHostsFromInventory(p *project.Project, group string) ([]string, error) {
+	if p.EnvName(globals.Env) == "" {
+		return nil, fmt.Errorf("no env set — pass --env, set default_env, or pass --servers explicitly")
+	}
+	return p.InventoryHosts(globals.Env, group)
 }
