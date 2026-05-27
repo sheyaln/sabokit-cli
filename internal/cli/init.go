@@ -106,23 +106,30 @@ func runInit(projectName string, f *initFlags) error {
 		return fmt.Errorf("at least one env is required")
 	}
 
-	fmt.Printf("cloning %s @ %s\n", f.templateRepo, f.templateTag)
+	if err := validateBucketNames(envs, f); err != nil {
+		return err
+	}
+
+	done := step(fmt.Sprintf("cloning consumer-template @ %s", f.templateTag))
 	src, err := template.Fetch(template.FetchOptions{Repo: f.templateRepo, Tag: f.templateTag})
 	if err != nil {
 		return err
 	}
 	defer template.CleanupParent(src)
+	done()
 
-	fmt.Printf("copying consumer-template/ → %s\n", target)
+	done = step(fmt.Sprintf("copying into %s", relPath(target)))
 	if err := template.CopyTree(src, target); err != nil {
 		return err
 	}
+	done()
 
 	for _, env := range envs {
+		done = step(fmt.Sprintf("scaffolding environments/%s/ (config.tf, backend.hcl)", env))
 		if err := scaffoldEnv(target, env, f); err != nil {
 			return fmt.Errorf("scaffold env %s: %w", env, err)
 		}
-		fmt.Printf("scaffolded environments/%s/ (config.tf, backend.hcl)\n", env)
+		done()
 	}
 
 	configInputs := configInputs{
@@ -134,9 +141,17 @@ func runInit(projectName string, f *initFlags) error {
 		sshUser:    f.sshUser,
 		sshKey:     f.sshKey,
 	}
+	done = step("writing .sabokit/config.yml")
 	if _, err := writeConfigYAML(target, configInputs); err != nil {
 		return err
 	}
+	done()
+
+	done = step("writing .gitignore, .envrc.example, README.md")
+	if err := writeProjectScaffolds(target, projectName, envs, f); err != nil {
+		return err
+	}
+	done()
 
 	if !f.skipBucket {
 		if err := ensureStateBuckets(envs, f); err != nil {
@@ -145,11 +160,150 @@ func runInit(projectName string, f *initFlags) error {
 	}
 
 	fmt.Printf("\ndone. next: cd %s && sabokit up\n", projectName)
-	if !f.skipBucket {
-		fmt.Println("    (config.tf has sensible defaults from consumer-template; edit if you need")
-		fmt.Println("     compute_hosts, identity tier_slots, or app-specific overrides)")
+	fmt.Println("    (config.tf has sensible defaults from consumer-template;")
+	fmt.Println("     edit if you need compute_hosts, identity tier_slots, or per-app overrides)")
+	return nil
+}
+
+// step prints "==> <label>" and returns a closure that prints "    ok" on
+// success. Callers wrap each substantive step so output is uniform.
+func step(label string) func() {
+	fmt.Printf("==> %s\n", label)
+	return func() {
+		fmt.Println("    ok")
+	}
+}
+
+func relPath(abs string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return abs
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err != nil {
+		return abs
+	}
+	return rel
+}
+
+// validateBucketNames checks the derived state-bucket name fits scw's
+// 63-char limit BEFORE the long-running clone runs. Fails fast.
+func validateBucketNames(envs []string, f *initFlags) error {
+	if f.skipBucket {
+		return nil
+	}
+	for _, env := range envs {
+		name := fmt.Sprintf("%s-tfstate-%s", f.orgSlug, env)
+		if len(name) > 63 {
+			return fmt.Errorf("derived bucket name %q is %d chars; scaleway caps at 63 — shorten --org-slug (currently %q)", name, len(name), f.orgSlug)
+		}
 	}
 	return nil
+}
+
+// writeProjectScaffolds drops the standard top-level files every sabokit
+// project needs: .gitignore, .envrc.example, README.md.
+func writeProjectScaffolds(target, projectName string, envs []string, f *initFlags) error {
+	if err := writeGitignore(target); err != nil {
+		return err
+	}
+	if err := writeEnvrcExample(target); err != nil {
+		return err
+	}
+	return writeOperatorREADME(target, projectName, envs, f)
+}
+
+func writeGitignore(target string) error {
+	path := filepath.Join(target, ".gitignore")
+	content := `# terraform state lives in scaleway object storage — never commit local copies
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# sabokit-derived runtime files (regenerated from terraform output every up/deploy)
+.ansible-vars.json
+.tf-output.json
+
+# terraform plans (often contain secrets in the diff)
+*.tfplan
+
+# legacy sabokit cache from pre-2026.05 versions — safe to delete if present
+.sabokit/sabokit-repo/
+
+# editors + OS
+.idea/
+.vscode/
+.DS_Store
+`
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func writeEnvrcExample(target string) error {
+	path := filepath.Join(target, ".envrc.example")
+	content := `# copy to .envrc, fill in, then 'direnv allow' (or 'source .envrc').
+# never commit .envrc — it contains long-lived scaleway credentials.
+
+export SCW_ACCESS_KEY="SCW..."
+export SCW_SECRET_KEY="..."
+export SCW_DEFAULT_PROJECT_ID="..."
+export SCW_DEFAULT_REGION="fr-par"
+export SCW_DEFAULT_ZONE="fr-par-1"
+
+# arm64 hosts must set this — sabokit-runner + scaleway/cli are amd64-only
+export SABOKIT_PLATFORM="linux/amd64"
+`
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func writeOperatorREADME(target, projectName string, envs []string, f *initFlags) error {
+	path := filepath.Join(target, "README.md")
+	content := fmt.Sprintf(`# %s
+
+sabokit-managed federated-commons stack.
+
+## envs
+
+%s
+
+%s is the default (sabokit-cli's `+"`default_env`"+`).
+
+## operating
+
+sabokit-cli is the only tool you need installed. See
+https://github.com/sheyaln/sabokit-cli for install + command reference.
+
+`+"```"+`bash
+sabokit up                          # provision + configure the default env
+sabokit status                      # tf outputs + container state
+sabokit deploy --apps espocrm       # redeploy one app
+sabokit logs <app> -f               # follow logs
+sabokit secrets list                # what's in scaleway secret manager
+sabokit destroy --apps <name>       # tear down one app
+sabokit --env staging up            # operate against a different env
+`+"```"+`
+
+## per-env shape
+
+each `+"`environments/<env>/`"+` directory carries:
+
+- `+"`config.tf`"+`        — committed authoritative config (locals.config = {…})
+- `+"`backend.hcl`"+`      — committed remote-state config; bucket is %s-tfstate-<env>
+- `+"`secrets.tf`"+`       — committed; `+"`data \"scaleway_secret_version\"`"+` blocks
+- `+"`inventory.ini`"+`    — generated by sabokit; do not edit (overwritten on every up/deploy)
+- `+"`.tf-output.json`"+`  — generated; reflects last terraform apply
+- `+"`.ansible-vars.json`"+` — generated; projection of TF outputs for ansible
+`, projectName, formatBulletList(envs), envs[0], f.orgSlug)
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func formatBulletList(items []string) string {
+	var b strings.Builder
+	for _, it := range items {
+		fmt.Fprintf(&b, "- `%s`\n", it)
+	}
+	return b.String()
 }
 
 func promptInitInputs(projectName string, f *initFlags) error {
@@ -234,8 +388,8 @@ func resolveEnvs(f *initFlags) []string {
 	first := prompt(r, "first env name [prod]: ", "prod")
 	envs = []string{first}
 	if first == "prod" {
-		ans := prompt(r, "also scaffold a staging env? [y/N]: ", "n")
-		if strings.HasPrefix(strings.ToLower(ans), "y") {
+		ans := prompt(r, "also scaffold a staging env? [Y/n]: ", "y")
+		if !strings.HasPrefix(strings.ToLower(ans), "n") {
 			envs = append(envs, "staging")
 		}
 	}
