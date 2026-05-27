@@ -116,6 +116,33 @@ func (c *Client) Output(envDir string) ([]byte, error) {
 	return c.capture(envDir, []string{"output", "-json"})
 }
 
+// PlanFile is the in-container path the saved plan lives at. Tied to
+// /workspace so callers can ApplyPlan against the same mount.
+const PlanFile = Workspace + "/.tfplan"
+
+// Plan runs `terraform plan -out=<PlanFile>` with the same option shape
+// as Apply. The user sees streamed plan output; the binary plan is
+// written to .tfplan inside the env dir and consumed by ApplyPlan.
+func (c *Client) Plan(envDir string, opts ApplyOpts) error {
+	args := []string{"plan", "-input=false", "-out=" + PlanFile}
+	if opts.Parallelism > 0 {
+		args = append(args, fmt.Sprintf("-parallelism=%d", opts.Parallelism))
+	}
+	for _, t := range opts.Targets {
+		args = append(args, "-target="+t)
+	}
+	for k, v := range opts.Vars {
+		args = append(args, "-var", k+"="+v)
+	}
+	return c.run(envDir, args)
+}
+
+// ApplyPlan applies a previously-saved plan file. Options were baked in
+// at plan time so no re-passing is needed.
+func (c *Client) ApplyPlan(envDir string) error {
+	return c.run(envDir, []string{"apply", "-input=false", PlanFile})
+}
+
 type ImportOpts struct {
 	Vars map[string]string
 }
