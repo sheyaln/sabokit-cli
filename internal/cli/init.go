@@ -12,13 +12,14 @@ import (
 )
 
 type initFlags struct {
-	templateRepo  string
-	templateTag   string
-	baseDomain    string
-	region        string
-	zone          string
-	sshUser       string
-	sshKey        string
+	templateRepo   string
+	templateTag    string
+	baseDomain     string
+	region         string
+	zone           string
+	sshUser        string
+	sshKey         string
+	env            string
 	nonInteractive bool
 }
 
@@ -37,17 +38,21 @@ defaults:
   --region              fr-par
   --ssh-user            root
   --ssh-key             ~/.ssh/id_ed25519
+  --env                 (empty — no env scaffolded by default)
+
+with --env <name>: copies environments/_template/ to environments/<name>/
+and writes default_env: <name> in .sabokit/config.yml so subsequent
+sabokit commands target that env automatically.
 
 set --non-interactive to skip prompts (all other required values must be
 passed as flags). consumer-template is fetched fresh via 'git clone
 --depth 1 --branch <tag>'; the .git directory is stripped from the result.
 
 next steps after init are printed at the end and follow consumer-template's
-own README (cp environments/_template environments/prod, fill in tfvars,
-run preflight/up/configure).`,
+own README (cp config.tf.example config.tf, edit, run preflight/up/configure).`,
 		Example: `  sabokit init my-stack
-  sabokit init my-stack --base-domain example.com --region nl-ams
-  sabokit init my-stack --non-interactive --base-domain example.com`,
+  sabokit init my-stack --env prod --base-domain example.com
+  sabokit init my-stack --non-interactive --base-domain example.com --env prod`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit(args[0], f)
@@ -60,6 +65,7 @@ run preflight/up/configure).`,
 	cmd.Flags().StringVar(&f.zone, "zone", "", "scaleway zone (default: <region>-1)")
 	cmd.Flags().StringVar(&f.sshUser, "ssh-user", "root", "ssh user for ansible / sabokit ssh")
 	cmd.Flags().StringVar(&f.sshKey, "ssh-key", "~/.ssh/id_ed25519", "ssh key path (sabokit will mount this into the runner)")
+	cmd.Flags().StringVar(&f.env, "env", "", "also bootstrap environments/<name>/ from _template and set default_env")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "skip prompts; require all values via flags")
 	return cmd
 }
@@ -92,20 +98,47 @@ func runInit(projectName string, f *initFlags) error {
 		return err
 	}
 
+	if f.env != "" {
+		if err := bootstrapEnv(target, f.env); err != nil {
+			return err
+		}
+		fmt.Printf("bootstrapped environments/%s/ from _template\n", f.env)
+	}
+
 	if err := writeProjectConfig(target, projectName, f); err != nil {
 		return err
 	}
 
 	fmt.Printf("\ndone. next steps:\n")
 	fmt.Printf("  cd %s\n", projectName)
-	fmt.Printf("  cp -r environments/_template environments/prod\n")
-	fmt.Printf("  cd environments/prod\n")
-	fmt.Printf("  cp terraform.tfvars.example terraform.tfvars && $EDITOR terraform.tfvars\n")
-	fmt.Printf("  cp backend.hcl.example      backend.hcl      && $EDITOR backend.hcl\n")
-	fmt.Printf("  cp inventory.ini.example    inventory.ini\n")
+	if f.env != "" {
+		fmt.Printf("  cd environments/%s\n", f.env)
+	} else {
+		fmt.Printf("  cp -r environments/_template environments/<env>\n")
+		fmt.Printf("  cd environments/<env>\n")
+	}
+	fmt.Printf("  cp config.tf.example     config.tf      && $EDITOR config.tf\n")
+	fmt.Printf("  cp backend.hcl.example   backend.hcl    && $EDITOR backend.hcl\n")
+	fmt.Printf("  cp inventory.ini.example inventory.ini\n")
+	fmt.Printf("  chmod +x preflight.sh up.sh configure.sh\n")
 	fmt.Printf("  ./preflight.sh && ./up.sh && ./configure.sh\n")
 	fmt.Printf("\nsee %s/README.md and environments/_template/README.md for detail.\n", projectName)
 	return nil
+}
+
+func bootstrapEnv(projectRoot, envName string) error {
+	if strings.ContainsAny(envName, "/\\") {
+		return fmt.Errorf("env name must not contain path separators: %q", envName)
+	}
+	src := filepath.Join(projectRoot, "environments", "_template")
+	dst := filepath.Join(projectRoot, "environments", envName)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("environments/%s already exists", envName)
+	}
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("environments/_template not found in template (tag %s) — cannot bootstrap env", template.DefaultTag)
+	}
+	return template.CopyTree(src, dst)
 }
 
 func validateProjectName(name string) error {
@@ -178,14 +211,13 @@ func writeProjectConfig(target, projectName string, f *initFlags) error {
 		return err
 	}
 	path := filepath.Join(dir, "config.yml")
-	content := fmt.Sprintf(`project: %s
-base_domain: %s
-scaleway:
-  region: %s
-  zone: %s
-ssh:
-  user: %s
-  key: %s
-`, projectName, f.baseDomain, f.region, f.zone, f.sshUser, f.sshKey)
-	return os.WriteFile(path, []byte(content), 0o644)
+	var b strings.Builder
+	fmt.Fprintf(&b, "project: %s\n", projectName)
+	fmt.Fprintf(&b, "base_domain: %s\n", f.baseDomain)
+	if f.env != "" {
+		fmt.Fprintf(&b, "default_env: %s\n", f.env)
+	}
+	fmt.Fprintf(&b, "scaleway:\n  region: %s\n  zone: %s\n", f.region, f.zone)
+	fmt.Fprintf(&b, "ssh:\n  user: %s\n  key: %s\n", f.sshUser, f.sshKey)
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
