@@ -56,9 +56,9 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | `sabokit destroy` | not yet implemented — destroy is manual via terraform in v0.1.0 |
 | `sabokit status [--apps X] [--servers Y]` | terraform outputs per layer + `docker ps` across hosts |
 | `sabokit ssh <host>` | passthrough to `ssh <user>@<host>` |
-| `sabokit logs <app> [--servers H] [--container C] [--tail N] [-f]` | `docker logs` over ssh |
+| `sabokit logs <app> [--servers H] [--group G] [--container C] [--tail N] [-f]` | `docker logs` over ssh — host resolved from env's `inventory.ini` `[apps]` group by default, override with `--group` (eg. `identity`) or `--servers` |
 | `sabokit secrets list/get/versions/create/rotate/delete` | name-first scaleway secret management — collapses uuid lookups + base64 decoding |
-| `sabokit apps list [--enabled]` | tabular list of apps in apps-manifest.yaml (NAME, ENABLED, HOST) |
+| `sabokit apps list [--enabled]` | catalog (NAME, CATEGORY, DESCRIPTION) by default; `--enabled` shows env-resolved enabled apps with URLs from `.ansible-vars.json` |
 | `sabokit apps add/remove` | edit apps-manifest.yaml + regenerate apps.tf — not yet implemented |
 | `sabokit version` | binary version + default runner image |
 
@@ -94,8 +94,9 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 
 ## status
 
-beta. v0.1.4 ships env-aware `init`/`deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.
+beta. v0.1.5 ships env-aware `init`/`deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.
 
-remaining gaps (not blocking deploy/down/status):
-- `apps list` parses the v1 apps-manifest schema (toy `{name: {enabled, host}}`) but real consumer-template uses the v3+ catalog schema (`apps: [{id, display_name, ...}]`) — `apps list` against a real project won't render. Same for `logs`'s host resolution.
-- `up` and `destroy` are stubs; use consumer-template's `preflight.sh`/`up.sh`/`configure.sh` for first-time deploys (or `terraform destroy` for teardown).
+remaining stubs (use consumer-template's own flow):
+- `up` — use `environments/<env>/preflight.sh && ./up.sh && ./configure.sh`
+- `destroy` — manual `terraform destroy` inside `environments/<env>/`
+- `apps add/remove` — edit `environments/<env>/config.tf`'s `locals.config.apps` block, then `sabokit deploy --base` (or re-run `configure.sh`)

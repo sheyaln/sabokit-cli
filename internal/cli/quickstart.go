@@ -74,11 +74,14 @@ prerequisites:
 
 5. operate via sabokit (env is auto from .sabokit/config.yml's default_env)
    ------------------------------------------------------------------------
+   sabokit apps list                        # catalog (what's available)
+   sabokit apps list --enabled              # what's running in current env
    sabokit deploy --apps espocrm --check    # apps.yml --check (dry run)
    sabokit deploy --apps espocrm            # apps.yml for real
    sabokit deploy --base                    # site.yml (bootstrap + apps)
    sabokit status                           # reads .tf-output.json + docker ps
-   sabokit logs espocrm -f                  # follow container logs
+   sabokit logs espocrm -f                  # follow container logs (apps group)
+   sabokit logs authentik --group identity  # different ansible group
    sabokit ssh app01-prod                   # shell into the host
    sabokit down --apps espocrm              # stop the containers
 
