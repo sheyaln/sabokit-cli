@@ -28,20 +28,24 @@ prerequisites:
   - ssh (key in agent or filesystem)
   - a scaleway account with API keys
 
-1. scaffold a new project from consumer-template
-   ----------------------------------------------
-   sabokit init my-stack
+1. scaffold a project + first env in one shot
+   --------------------------------------------
+   sabokit init my-stack --env prod
    #   prompts for base domain, scaleway region, ssh user/key
-   #   or pass --non-interactive --base-domain example.com [--region nl-ams]
+   #   --non-interactive --base-domain example.com to skip prompts
 
    cd my-stack
 
    you now have:
-     .sabokit/config.yml        (sabokit-cli scope)
-     apps-manifest.yaml         (catalog of every shipped app)
-     environments/_template/    (copy this per env)
-     modules/stack/             (shared TF wiring)
-     scripts/                   (bump-version, import-base-image)
+     .sabokit/config.yml             (sabokit-cli scope, default_env: prod)
+     apps-manifest.yaml              (catalog from consumer-template)
+     environments/_template/         (copy this per new env)
+     environments/prod/              (your bootstrapped env)
+       config.tf.example             (edit + rename → config.tf)
+       backend.hcl.example
+       inventory.ini.example
+       preflight.sh, up.sh, configure.sh, secrets.tf
+     modules/stack/                  (shared TF wiring)
 
 2. set scaleway credentials
    -------------------------
@@ -57,43 +61,45 @@ prerequisites:
    # arm64 hosts also need:
    export SABOKIT_PLATFORM=linux/amd64
 
-4. inspect your secrets (works today, independent of the runner image)
-   -------------------------------------------------------------------
-   sabokit secrets list                     # clean 4-col table
-   sabokit secrets list --tag authentik
-   sabokit secrets get db-password          # plaintext to stdout
-
-5. follow consumer-template's per-env flow
-   ----------------------------------------
-   cp -r environments/_template environments/prod
+4. fill in the env config (consumer-template's own flow)
+   -----------------------------------------------------
    cd environments/prod
-   cp terraform.tfvars.example terraform.tfvars && $EDITOR terraform.tfvars
-   cp backend.hcl.example      backend.hcl      && $EDITOR backend.hcl
-   cp inventory.ini.example    inventory.ini
+   cp config.tf.example     config.tf      && $EDITOR config.tf
+   cp backend.hcl.example   backend.hcl    && $EDITOR backend.hcl
+   cp inventory.ini.example inventory.ini
+   chmod +x preflight.sh up.sh configure.sh
    ./preflight.sh && ./up.sh && ./configure.sh
+   # up.sh writes .ansible-vars.json + .tf-output.json (sabokit reads these)
+   cd ../..
 
-6. operate (sabokit-cli wrappers work from the project root)
-   ---------------------------------------------------------
-   sabokit deploy --apps espocrm --check    # ansible site.yml dry-run
-   sabokit deploy --apps espocrm            # for real
-   sabokit status                           # tf outputs + docker ps
+5. operate via sabokit (env is auto from .sabokit/config.yml's default_env)
+   ------------------------------------------------------------------------
+   sabokit deploy --apps espocrm --check    # apps.yml --check (dry run)
+   sabokit deploy --apps espocrm            # apps.yml for real
+   sabokit deploy --base                    # site.yml (bootstrap + apps)
+   sabokit status                           # reads .tf-output.json + docker ps
    sabokit logs espocrm -f                  # follow container logs
-   sabokit ssh app01                        # shell into the host
+   sabokit ssh app01-prod                   # shell into the host
    sabokit down --apps espocrm              # stop the containers
-   sabokit secrets rotate db-pw 'new' --apps espocrm
-                                            # push version + redeploy
 
-note: sabokit-cli's project model currently assumes flat root layout (one
-inventory.ini, one apps-manifest at the project root). consumer-template's
-multi-env layout (environments/<env>/inventory.ini) doesn't fully line up
-yet — that's a known gap, see the README.
+   # override env per-call:
+   sabokit --env staging deploy --apps espocrm
+
+6. inspect or rotate secrets (independent of runner image)
+   -------------------------------------------------------
+   sabokit secrets list                          # clean 4-col table
+   sabokit secrets list --tag authentik
+   sabokit secrets get db-password               # plaintext to stdout
+   sabokit secrets rotate db-pw 'new' --apps espocrm
+                                                  # push version + redeploy
 
 troubleshooting:
-  - "no .sabokit/config.yml found"  → cd into your project dir
-  - "docker daemon not reachable"   → start docker desktop / dockerd
-  - "git clone failed"              → check network + repo URL
-  - "ssh permission denied"         → ssh-add your key, or set ssh.key in config
-  - "no matching manifest"          → export SABOKIT_PLATFORM=linux/amd64
+  - "no .sabokit/config.yml found"                → cd into your project dir
+  - "environment X not found"                     → check environments/<X>/ exists
+  - "no .tf-output.json"                          → run up.sh in the env dir first
+  - "docker daemon not reachable"                 → start docker desktop / dockerd
+  - "ssh permission denied"                       → ssh-add your key
+  - "no matching manifest" on docker pull         → export SABOKIT_PLATFORM=linux/amd64
 
-see 'sabokit <command> --help' for full flag detail on each subcommand.
+see 'sabokit <command> --help' for full flag detail.
 `
