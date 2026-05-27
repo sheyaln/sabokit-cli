@@ -78,6 +78,7 @@ passed through to the runner image:
 	cmd.AddCommand(
 		newQuickstartCmd(),
 		newInitCmd(),
+		newConfigCmd(),
 		newUpCmd(),
 		newDeployCmd(),
 		newDownCmd(),
