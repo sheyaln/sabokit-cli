@@ -14,8 +14,8 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 
 | Area | Shipped | Open |
 | --- | --- | --- |
-| `sabokit init` interactive scaffolding | prompts; project + env(s) bootstrap; per-env `config.tf` + `backend.hcl` generated from prompts | `.gitignore`, `.envrc.example`, `README.md` scaffolds; staging-default-YES; `==> ok` progress cadence |
-| State bucket creation | per-env idempotent create via `scaleway/cli` | versioning enable; block-public-access; name-length (≤63) precheck |
+| `sabokit init` interactive scaffolding | prompts; project + env(s); per-env `config.tf` + `backend.hcl`; `.gitignore` + `.envrc.example` + `README.md` scaffolds; staging-default-YES; `==> ok` progress cadence | — |
+| State bucket creation | per-env idempotent create via `scaleway/cli`; versioning enabled; `acl=private`; name-length (≤63) precheck | block-public-access (scw doesn't expose a flag; `acl=private` is canonical) |
 | Preflight (phase 0 of `up`) | config keys + SCW creds + IAM ssh-key upload | DNS-zone-delegation check; gateway-domain `dig` propagation wait |
 | `sabokit up` end-to-end | preflight + tf apply + refresh + ansible bootstrap + LE-cert wait + Authentik index wait + full apply + outpost import | `terraform plan` with human-confirm gate (prod default-confirm; `--no-confirm` opt-out) |
 | Inventory + `.ansible-vars.json` regen | refreshed before every up/deploy/down/status | — |
@@ -33,7 +33,7 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 
 Each row is one branch, one commit-set, one tag. No PR ceremony; merge to master and tag.
 
-1. **Foundation hardening** — bucket versioning + block-public-access + length check; init scaffolds `.gitignore`/`.envrc.example`/`README.md`; staging default flips to YES; per-step `==> ok` progress cadence.
+1. ~~**Foundation hardening**~~ — shipped v2026.05.1.
 2. **Preflight DNS + plan-confirm gate** — `scw dns zone list` delegation check; gateway-domain Go-side `net.LookupHost` propagation wait; `terraform plan` phase with human-confirm before `apply` (default-yes when env != "prod", `--no-confirm` opt-out).
 3. **`sabokit env add/list/switch`** — `env add <name>` reuses the init prompt + bucket flow for an additional env. `env list` enumerates `environments/`. `env switch <name>` rewrites `.sabokit/config.yml` `default_env`.
 4. **`sabokit bump <tag>`** — rewrite every `?ref=…` pin under the consumer's TF, optionally bump a sibling sabokit submodule, prompt to run any `moved{}` migrations published in upstream's `consumer-template/modules/stack/migrations.tf` for the new tag.
