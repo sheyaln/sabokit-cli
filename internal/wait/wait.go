@@ -93,3 +93,44 @@ func HTTP(url string, predicate func(*http.Response) bool, opts Options, onAttem
 func HTTPStatus(url string, status int, opts Options, onAttempt func(int, error)) error {
 	return HTTP(url, func(r *http.Response) bool { return r.StatusCode == status }, opts, onAttempt)
 }
+
+// DefaultResolve is the gateway-domain DNS propagation probe (~3min).
+func DefaultResolve() Options {
+	return Options{Attempts: 18, Interval: 10 * time.Second, Timeout: 5 * time.Second}
+}
+
+// Resolver abstracts net.LookupHost so tests can swap in a fake.
+type Resolver interface {
+	LookupHost(host string) ([]string, error)
+}
+
+type netResolver struct{}
+
+func (netResolver) LookupHost(host string) ([]string, error) {
+	return net.LookupHost(host)
+}
+
+// DefaultResolver wraps net.LookupHost.
+var DefaultResolver Resolver = netResolver{}
+
+// Resolve probes host through Resolver until it returns at least one IP
+// (and predicate, if set, accepts the IPs). predicate may be nil. Returns
+// nil on success, error on attempts exhaustion.
+func Resolve(host string, opts Options, predicate func([]string) bool, resolver Resolver) error {
+	if resolver == nil {
+		resolver = DefaultResolver
+	}
+	if opts.Attempts < 1 {
+		opts.Attempts = 1
+	}
+	for i := 0; i < opts.Attempts; i++ {
+		ips, err := resolver.LookupHost(host)
+		if err == nil && len(ips) > 0 && (predicate == nil || predicate(ips)) {
+			return nil
+		}
+		if i+1 < opts.Attempts {
+			time.Sleep(opts.Interval)
+		}
+	}
+	return fmt.Errorf("dns %s never resolved after %d attempts", host, opts.Attempts)
+}
