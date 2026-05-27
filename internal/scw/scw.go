@@ -304,10 +304,14 @@ func (c *Client) BucketExists(name, region string) (bool, error) {
 	return false, nil
 }
 
-// CreateBucket creates an S3 bucket. No-op + nil error if it already
-// exists (idempotent for first-run vs re-run). Returns error on any
-// other failure.
+// CreateBucket creates an S3 bucket configured for terraform state:
+// versioning enabled (insurance against `terraform state rm` accidents)
+// and acl=private (no public read — scw's canonical private setting).
+// No-op + nil error if a bucket with this name already exists.
 func (c *Client) CreateBucket(name, region string) error {
+	if len(name) > 63 {
+		return fmt.Errorf("bucket name %q is %d chars; scw object storage caps at 63", name, len(name))
+	}
 	exists, err := c.BucketExists(name, region)
 	if err != nil {
 		return err
@@ -315,7 +319,12 @@ func (c *Client) CreateBucket(name, region string) error {
 	if exists {
 		return nil
 	}
-	args := []string{"object", "bucket", "create", "name=" + name, "acl=private"}
+	args := []string{
+		"object", "bucket", "create",
+		"name=" + name,
+		"acl=private",
+		"enable-versioning=true",
+	}
 	if region != "" {
 		args = append(args, "region="+region)
 	}
