@@ -96,6 +96,7 @@ passed through to the runner image:
 		newSSHCmd(),
 		newSecretsCmd(),
 		newAppsCmd(),
+		newEnvCmd(),
 		newVersionCmd(),
 	)
 
