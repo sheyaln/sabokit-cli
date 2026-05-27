@@ -8,7 +8,7 @@ import (
 
 const (
 	DefaultRunnerImage = "ghcr.io/sheyaln/sabokit-runner"
-	DefaultRunnerTag   = "v3.0.0"
+	DefaultRunnerTag   = "v3.3.1"
 	DefaultScwImage    = "scaleway/cli:2.56"
 )
 

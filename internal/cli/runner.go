@@ -11,8 +11,8 @@ import (
 
 const (
 	containerWorkspace = "/workspace"
-	playbookDir        = "/platform/ansible"
-	terraformDir       = "/platform/terraform"
+	playbookDir        = "/opt/sabokit/platform/ansible"
+	terraformDir       = "/opt/sabokit/platform/terraform"
 )
 
 func baseInvocation(p *project.Project) (docker.Invocation, error) {

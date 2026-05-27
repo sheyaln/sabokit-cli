@@ -28,11 +28,12 @@ func newDeployCmd() *cobra.Command {
 		Use:   "deploy",
 		Short: "run ansible against the project (apps.yml by default; site.yml with --base)",
 		Long: `runs an ansible playbook inside the runner image against the current env.
-mounts the env dir at /workspace and uses inventory.ini from there.
+mounts the env dir at /workspace and uses inventory.ini from there. the
+playbooks ship in the image at /opt/sabokit/platform/ansible/.
 
 playbook selection:
-  default       /platform/ansible/apps.yml   — apps only, fast redeploy
-  --base        /platform/ansible/site.yml   — bootstrap + apps (first-time)
+  default       /opt/sabokit/platform/ansible/apps.yml   — apps only, fast redeploy
+  --base        /opt/sabokit/platform/ansible/site.yml   — bootstrap + apps (first-time)
 
 env vars passed to ansible (auto, from the env dir):
   -e @/workspace/.ansible-vars.json (if present)

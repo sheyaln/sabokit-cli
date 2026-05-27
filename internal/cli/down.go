@@ -23,8 +23,8 @@ are untouched. reversible via 'sabokit deploy --apps <same>'.
 passes the same env-aware -e flags as deploy (env_name,
 @/workspace/.ansible-vars.json, gateway_domain).
 
-requires the sabokit-runner v3.0.0+ image (down.yml does not exist in
-older runner builds).`,
+runs against the sabokit-runner image (defaults to the version in
+'sabokit version'); down.yml lives at /opt/sabokit/platform/ansible/.`,
 		Example: `  sabokit down --apps espocrm
   sabokit down --apps espocrm,n8n --servers app01
   sabokit down --apps espocrm --print`,
