@@ -50,16 +50,16 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | command | what |
 | --- | --- |
 | `sabokit init <name> [--env X --base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, optionally bootstrap `environments/<env>/`, write `.sabokit/config.yml` |
-| `sabokit up [--apps X]` | terraform base+identity+apps then ansible deploy — not yet implemented |
+| `sabokit up [--skip-preflight --skip-up --skip-configure --template-tag T]` | chain `preflight.sh && up.sh && configure.sh` locally in the env dir; auto-clones `FED_COMMONS_DIR` to `.sabokit/sabokit-repo/` |
 | `sabokit deploy [--apps X --servers Y --base --rotate-secrets --check --overlay F]` | ansible-playbook apps.yml (or site.yml with --base) against `environments/<env>/` |
 | `sabokit down --apps X [--servers Y]` | ansible-playbook down.yml — stop containers, leave cloud resources |
-| `sabokit destroy` | not yet implemented — destroy is manual via terraform in v0.1.0 |
+| `sabokit destroy {--apps X[,Y] \| --layer base\|identity\|apps \| --all} [-y]` | local `terraform destroy` in the env dir with the right `-target=` |
 | `sabokit status [--apps X] [--servers Y]` | terraform outputs per layer + `docker ps` across hosts |
 | `sabokit ssh <host>` | passthrough to `ssh <user>@<host>` |
 | `sabokit logs <app> [--servers H] [--group G] [--container C] [--tail N] [-f]` | `docker logs` over ssh — host resolved from env's `inventory.ini` `[apps]` group by default, override with `--group` (eg. `identity`) or `--servers` |
 | `sabokit secrets list/get/versions/create/rotate/delete` | name-first scaleway secret management — collapses uuid lookups + base64 decoding |
 | `sabokit apps list [--enabled]` | catalog (NAME, CATEGORY, DESCRIPTION) by default; `--enabled` shows env-resolved enabled apps with URLs from `.ansible-vars.json` |
-| `sabokit apps add/remove` | edit apps-manifest.yaml + regenerate apps.tf — not yet implemented |
+| `sabokit apps add <name>` / `sabokit apps remove <name>` | edit `environments/<env>/config.tf` — uncomment or flip `enabled` for the named app, validated against the catalog |
 | `sabokit version` | binary version + default runner image |
 
 global flags:
@@ -94,9 +94,11 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 
 ## status
 
-beta. v0.1.5 ships env-aware `init`/`deploy`/`down`/`status`/`ssh`/`logs`/`apps list`/`secrets *`/`version`. `up`/`destroy`/`apps add|remove` are stubs. requires the `sabokit-runner:v3.0.0` image for the ansible playbooks (against the older `federated-commons-runner:v2.17.0`, `deploy` works but `down` and parts of `status` won't). `secrets *` uses the official `scaleway/cli` image and is independent of the runner image.
+beta. v0.1.6 is feature-complete for the v0.1.x line: `init`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list/add/remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`.
 
-remaining stubs (use consumer-template's own flow):
-- `up` — use `environments/<env>/preflight.sh && ./up.sh && ./configure.sh`
-- `destroy` — manual `terraform destroy` inside `environments/<env>/`
-- `apps add/remove` — edit `environments/<env>/config.tf`'s `locals.config.apps` block, then `sabokit deploy --base` (or re-run `configure.sh`)
+execution models per command:
+- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section). Needs `sabokit-runner:v3.0.0+` for full surface (`down.yml`, `apps.yml`). Falls back to `federated-commons-runner:v2.17.0` for `deploy` only.
+- **docker (scaleway/cli image)**: `secrets *`. Decoupled from the runner image.
+- **local shell**: `up` (chains the consumer-template scripts), `destroy` (terraform destroy in the env dir), `apps add/remove` (config.tf editing), `init` (git clone + copy), `ssh`, `logs` (ssh + remote docker).
+
+`up` requires local `terraform`, `ansible`, `scw`, `jq`, `python3`, `awk`, `nc`, `ssh`, `ssh-keygen` — the same deps the underlying scripts have always needed.

@@ -61,34 +61,42 @@ prerequisites:
    # arm64 hosts also need:
    export SABOKIT_PLATFORM=linux/amd64
 
-4. fill in the env config (consumer-template's own flow)
-   -----------------------------------------------------
+4. fill in the env config
+   -----------------------
    cd environments/prod
    cp config.tf.example     config.tf      && $EDITOR config.tf
    cp backend.hcl.example   backend.hcl    && $EDITOR backend.hcl
    cp inventory.ini.example inventory.ini
-   chmod +x preflight.sh up.sh configure.sh
-   ./preflight.sh && ./up.sh && ./configure.sh
-   # up.sh writes .ansible-vars.json + .tf-output.json (sabokit reads these)
    cd ../..
 
-5. operate via sabokit (env is auto from .sabokit/config.yml's default_env)
-   ------------------------------------------------------------------------
+5. provision the env (terraform + ansible bootstrap + configure)
+   -------------------------------------------------------------
+   sabokit up   # chains preflight.sh + up.sh + configure.sh locally
+                #   FED_COMMONS_DIR is auto-cloned to .sabokit/sabokit-repo/
+                #   requires terraform, ansible, scw, jq, python3, nc, ssh on PATH
+                #   --skip-preflight / --skip-up / --skip-configure for re-runs
+
+6. operate (env is auto from .sabokit/config.yml's default_env)
+   ------------------------------------------------------------
    sabokit apps list                        # catalog (what's available)
    sabokit apps list --enabled              # what's running in current env
+   sabokit apps add vikunja                 # enable in config.tf
+   sabokit apps remove jitsi                # disable in config.tf
    sabokit deploy --apps espocrm --check    # apps.yml --check (dry run)
    sabokit deploy --apps espocrm            # apps.yml for real
    sabokit deploy --base                    # site.yml (bootstrap + apps)
-   sabokit status                           # reads .tf-output.json + docker ps
+   sabokit status                           # tf-output.json + docker ps
    sabokit logs espocrm -f                  # follow container logs (apps group)
    sabokit logs authentik --group identity  # different ansible group
    sabokit ssh app01-prod                   # shell into the host
    sabokit down --apps espocrm              # stop the containers
+   sabokit destroy --apps espocrm           # terraform destroy -target=...
+   sabokit destroy --all                    # terraform destroy (entire env)
 
    # override env per-call:
    sabokit --env staging deploy --apps espocrm
 
-6. inspect or rotate secrets (independent of runner image)
+7. inspect or rotate secrets (independent of runner image)
    -------------------------------------------------------
    sabokit secrets list                          # clean 4-col table
    sabokit secrets list --tag authentik
