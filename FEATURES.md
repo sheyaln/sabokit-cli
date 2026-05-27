@@ -43,6 +43,13 @@ Each row is one branch, one commit-set, one tag. No PR ceremony; merge to master
 8. **`sabokit cost-estimate`** — monthly burn from `compute_hosts` shape × scaleway pricing API.
 9. **`sabokit version-check`** — github tags API ping, flag if consumer is behind.
 
+## Scaffolding non-negotiables
+
+Two rules the upstream operator has surfaced that affect what `sabokit init` ships:
+
+- **`.tfvars` is for secrets only.** Never scaffold a `terraform.tfvars.example` or a `terraform.tfvars` file. Operator-facing configuration (which apps are on, hostnames, image tags, host-services knobs) lives in `config.tf` as a `locals.config` block plus a `module "stack"` call. `.tfvars` is reserved for the rare case of passing plaintext secret values at apply time (gitignored by default). Don't conflate "terraform variable" with the `.tfvars` file format.
+- **`inventory.ini.example` is misleading.** Upstream still ships a placeholder, but the real `inventory.ini` is generated from `terraform output -json compute_hosts` after apply. `sabokit init` should NOT copy the `.example` over; `sabokit up` writes the real file. Drop the placeholder from the scaffolded env tree.
+
 ## Out of scope (won't build)
 
 - App-specific tooling (backrest UI passthrough, n8n workflow export, grafana dashboard import). Operators reach app UIs via `sabokit ssh` + `sabokit logs`.
