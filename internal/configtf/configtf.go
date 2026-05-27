@@ -42,6 +42,23 @@ func GetString(content, key string) string {
 	return ""
 }
 
+// SetString rewrites the first non-commented `<key> = "..."` line in
+// content to have the given value. Preserves indentation + any trailing
+// comment. Returns the modified content and a bool indicating whether
+// the key was actually found.
+func SetString(content, key, value string) (string, bool) {
+	re := regexp.MustCompile(`(?m)^(\s*)(` + regexp.QuoteMeta(key) + `\s*=\s*)"[^"]*"(.*)$`)
+	loc := re.FindStringSubmatchIndex(content)
+	if loc == nil {
+		return content, false
+	}
+	indent := content[loc[2]:loc[3]]
+	prefix := content[loc[4]:loc[5]]
+	suffix := content[loc[6]:loc[7]]
+	replacement := indent + prefix + `"` + value + `"` + suffix
+	return content[:loc[0]] + replacement + content[loc[1]:], true
+}
+
 // AppStatus reports the current state of <name> within the config.tf apps
 // block.
 type AppStatus int

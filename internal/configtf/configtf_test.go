@@ -31,6 +31,33 @@ const sample = `locals {
 }
 `
 
+func TestSetString(t *testing.T) {
+	in := `locals {
+  config = {
+    scaleway_project_id = "00000000-0000-0000-0000-000000000000" # replace with your project UUID
+    org_slug    = "acme"
+    base_domain = "example.org"
+  }
+}`
+	out, ok := SetString(in, "scaleway_project_id", "abc-123")
+	if !ok {
+		t.Fatal("expected found=true")
+	}
+	if !strings.Contains(out, `scaleway_project_id = "abc-123"`) {
+		t.Errorf("uuid not replaced:\n%s", out)
+	}
+	if !strings.Contains(out, "# replace with your project UUID") {
+		t.Errorf("trailing comment lost:\n%s", out)
+	}
+	out, ok = SetString(out, "org_slug", "neworg")
+	if !ok || !strings.Contains(out, `org_slug    = "neworg"`) {
+		t.Errorf("org_slug not replaced or indentation broken:\n%s", out)
+	}
+	if _, ok := SetString(in, "missing_key", "x"); ok {
+		t.Error("expected found=false for missing key")
+	}
+}
+
 func TestGetString(t *testing.T) {
 	tf := `locals {
   config = {
