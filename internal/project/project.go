@@ -1,9 +1,12 @@
 package project
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -134,69 +137,159 @@ func (p *Project) TFOutputPath(envOverride string) string {
 }
 
 type appsManifest struct {
-	Apps map[string]appEntry `yaml:"apps"`
+	SchemaVersion int           `yaml:"schema_version"`
+	Apps          []manifestApp `yaml:"apps"`
 }
 
-type appEntry struct {
-	Enabled bool   `yaml:"enabled"`
-	Host    string `yaml:"host"`
+type manifestApp struct {
+	ID               string `yaml:"id"`
+	DisplayName      string `yaml:"display_name"`
+	Category         string `yaml:"category"`
+	DescriptionShort string `yaml:"description_short"`
 }
 
-type App struct {
-	Name    string
+// CatalogApp is one entry in the upstream apps-manifest.yaml. The manifest
+// is a producer-curated catalog of every app sabokit knows how to deploy.
+// Per-env enabled state and host assignment do NOT live here — those come
+// from the env's .ansible-vars.json (written by up.sh).
+type CatalogApp struct {
+	ID               string
+	DisplayName      string
+	Category         string
+	DescriptionShort string
+}
+
+func (p *Project) Catalog() ([]CatalogApp, error) {
+	data, err := os.ReadFile(p.AppsManifestPath())
+	if err != nil {
+		return nil, fmt.Errorf("read apps manifest: %w", err)
+	}
+	var m appsManifest
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parse apps manifest: %w", err)
+	}
+	out := make([]CatalogApp, 0, len(m.Apps))
+	for _, a := range m.Apps {
+		out = append(out, CatalogApp{
+			ID:               a.ID,
+			DisplayName:      a.DisplayName,
+			Category:         a.Category,
+			DescriptionShort: a.DescriptionShort,
+		})
+	}
+	return out, nil
+}
+
+// EnvApp is the env-resolved view of an app: enabled state plus the URL TF
+// computed for it (when enabled). Sourced from .ansible-vars.json's
+// enabled_apps map.
+type EnvApp struct {
+	ID      string
 	Enabled bool
-	Host    string
+	URL     string
 }
 
-func (p *Project) AllApps() ([]App, error) {
-	data, err := os.ReadFile(p.AppsManifestPath())
+func (p *Project) EnvApps(envOverride string) ([]EnvApp, error) {
+	catalog, err := p.Catalog()
 	if err != nil {
-		return nil, fmt.Errorf("read apps manifest: %w", err)
+		return nil, err
 	}
-	var m appsManifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse apps manifest: %w", err)
+	enabled, err := p.loadEnabledAppsMap(envOverride)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]App, 0, len(m.Apps))
-	for name, e := range m.Apps {
-		out = append(out, App{Name: name, Enabled: e.Enabled, Host: e.Host})
+	out := make([]EnvApp, 0, len(catalog))
+	for _, a := range catalog {
+		e, ok := enabled[a.ID]
+		isEnabled := ok && e.URL != ""
+		out = append(out, EnvApp{ID: a.ID, Enabled: isEnabled, URL: e.URL})
 	}
 	return out, nil
 }
 
-func (p *Project) HostsForApp(name string) ([]string, error) {
-	data, err := os.ReadFile(p.AppsManifestPath())
+// InventoryHosts parses the env's inventory.ini and returns the host names
+// in the named group ("apps", "identity", etc.). Group sections like
+// "[apps:vars]" or "[all:vars]" are ignored (they declare variables, not
+// hosts).
+func (p *Project) InventoryHosts(envOverride, group string) ([]string, error) {
+	dir, err := p.WorkspaceDir(envOverride)
 	if err != nil {
-		return nil, fmt.Errorf("read apps manifest: %w", err)
+		return nil, err
 	}
-	var m appsManifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse apps manifest: %w", err)
+	path := filepath.Join(dir, p.Config.Inventory)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open inventory %s: %w", path, err)
 	}
-	e, ok := m.Apps[name]
-	if !ok {
-		return nil, fmt.Errorf("app %q not in manifest", name)
-	}
-	if e.Host == "" {
-		return nil, nil
-	}
-	return []string{e.Host}, nil
-}
+	defer f.Close()
 
-func (p *Project) EnabledApps() ([]string, error) {
-	data, err := os.ReadFile(p.AppsManifestPath())
-	if err != nil {
-		return nil, fmt.Errorf("read apps manifest: %w", err)
-	}
-	var m appsManifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse apps manifest: %w", err)
-	}
-	out := make([]string, 0, len(m.Apps))
-	for name, e := range m.Apps {
-		if e.Enabled {
-			out = append(out, name)
+	var hosts []string
+	currentGroup := ""
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
 		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			header := line[1 : len(line)-1]
+			if strings.Contains(header, ":") {
+				currentGroup = ""
+				continue
+			}
+			currentGroup = header
+			continue
+		}
+		if currentGroup != group {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		hosts = append(hosts, fields[0])
 	}
-	return out, nil
+	if err := s.Err(); err != nil {
+		return nil, err
+	}
+	return hosts, nil
+}
+
+type ansibleVars struct {
+	EnabledApps  map[string]ansibleEnabledApp `json:"enabled_apps"`
+	ComputeHosts map[string]ansibleHost       `json:"compute_hosts"`
+}
+
+type ansibleEnabledApp struct {
+	URL string `json:"url"`
+}
+
+type ansibleHost struct {
+	PublicIP      string   `json:"public_ip"`
+	AnsibleGroup  string   `json:"ansible_group"`
+	AnsibleGroups []string `json:"ansible_groups"`
+}
+
+func (p *Project) loadAnsibleVars(envOverride string) (*ansibleVars, error) {
+	path := p.AnsibleVarsPath(envOverride)
+	if path == "" {
+		return nil, fmt.Errorf("no env set (pass --env or set default_env in .sabokit/config.yml)")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w (run up.sh in the env dir to generate)", path, err)
+	}
+	var v ansibleVars
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return &v, nil
+}
+
+func (p *Project) loadEnabledAppsMap(envOverride string) (map[string]ansibleEnabledApp, error) {
+	v, err := p.loadAnsibleVars(envOverride)
+	if err != nil {
+		return nil, err
+	}
+	return v.EnabledApps, nil
 }

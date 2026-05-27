@@ -83,7 +83,7 @@ func TestAnsibleVarsAndTFOutputPaths(t *testing.T) {
 	}
 }
 
-func TestLoadAndEnabledApps(t *testing.T) {
+func TestLoadAndCatalog(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, configDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -91,21 +91,23 @@ func TestLoadAndEnabledApps(t *testing.T) {
 	cfg := `project: test
 scaleway:
   region: fr-par
-  zone: fr-par-1
 ssh:
   user: root
-  key: ~/.ssh/id_ed25519
 `
-	manifest := `apps:
-  espocrm:
-    enabled: true
-    host: app01
-  n8n:
-    enabled: false
-    host: app01
-  authentik:
-    enabled: true
-    host: app02
+	manifest := `schema_version: 1
+apps:
+  - id: outline
+    display_name: Outline
+    category: collaboration
+    description_short: Team wiki
+  - id: espocrm
+    display_name: EspoCRM
+    category: crm
+    description_short: Open source CRM
+  - id: n8n
+    display_name: n8n
+    category: automation
+    description_short: Workflow automation
 `
 	if err := os.WriteFile(filepath.Join(dir, configDir, configFile), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
@@ -124,28 +126,115 @@ ssh:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Config.Project != "test" {
-		t.Errorf("project = %q, want %q", p.Config.Project, "test")
-	}
-	if p.Config.Scaleway.Region != "fr-par" {
-		t.Errorf("region = %q", p.Config.Scaleway.Region)
-	}
-	if p.Config.Inventory != "inventory.ini" {
-		t.Errorf("inventory default not applied: %q", p.Config.Inventory)
-	}
-
-	apps, err := p.EnabledApps()
+	apps, err := p.Catalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	sort.Strings(apps)
-	want := []string{"authentik", "espocrm"}
-	if len(apps) != len(want) {
-		t.Fatalf("apps = %v, want %v", apps, want)
+	if len(apps) != 3 {
+		t.Fatalf("got %d apps, want 3", len(apps))
 	}
-	for i := range apps {
-		if apps[i] != want[i] {
-			t.Fatalf("apps = %v, want %v", apps, want)
+	sort.Slice(apps, func(i, j int) bool { return apps[i].ID < apps[j].ID })
+	if apps[0].ID != "espocrm" || apps[0].DisplayName != "EspoCRM" {
+		t.Errorf("espocrm entry wrong: %+v", apps[0])
+	}
+	if apps[2].Category != "collaboration" {
+		t.Errorf("outline category = %q", apps[2].Category)
+	}
+}
+
+func TestEnvAppsFromAnsibleVars(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "prod")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `schema_version: 1
+apps:
+  - id: outline
+    display_name: Outline
+    category: collaboration
+  - id: espocrm
+    display_name: EspoCRM
+    category: crm
+  - id: n8n
+    display_name: n8n
+    category: automation
+`
+	vars := `{
+		"enabled_apps": {
+			"outline": {"url": "https://wiki.example.com"},
+			"espocrm": {"url": "https://crm.example.com"},
+			"n8n": null
 		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "apps-manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, ".ansible-vars.json"), []byte(vars), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Project{Root: dir, Config: Config{Inventory: "inventory.ini", AppsManifest: "apps-manifest.yaml", DefaultEnv: "prod"}}
+	apps, err := p.EnvApps("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]EnvApp{}
+	for _, a := range apps {
+		got[a.ID] = a
+	}
+	if !got["outline"].Enabled || got["outline"].URL != "https://wiki.example.com" {
+		t.Errorf("outline = %+v", got["outline"])
+	}
+	if !got["espocrm"].Enabled {
+		t.Errorf("espocrm should be enabled: %+v", got["espocrm"])
+	}
+	if got["n8n"].Enabled {
+		t.Errorf("n8n should be disabled (null value): %+v", got["n8n"])
+	}
+}
+
+func TestInventoryHosts(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "prod")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inv := `[apps]
+app01-prod ansible_host=51.1.1.1 ansible_user=root
+app02-prod ansible_host=51.1.1.2 ansible_user=root
+
+[identity]
+auth01-prod ansible_host=51.2.2.2 ansible_user=root
+
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
+`
+	if err := os.WriteFile(filepath.Join(envDir, "inventory.ini"), []byte(inv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Project{Root: dir, Config: Config{Inventory: "inventory.ini", DefaultEnv: "prod"}}
+
+	apps, err := p.InventoryHosts("", "apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 2 || apps[0] != "app01-prod" || apps[1] != "app02-prod" {
+		t.Errorf("apps hosts = %v", apps)
+	}
+	identity, err := p.InventoryHosts("", "identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(identity) != 1 || identity[0] != "auth01-prod" {
+		t.Errorf("identity hosts = %v", identity)
+	}
+	none, err := p.InventoryHosts("", "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Errorf("missing group should be empty, got %v", none)
 	}
 }
