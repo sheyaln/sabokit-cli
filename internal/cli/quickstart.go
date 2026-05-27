@@ -28,29 +28,7 @@ prerequisites:
   - ssh (key in agent or filesystem)
   - a scaleway account with API keys
 
-1. scaffold a project + first env in one shot
-   --------------------------------------------
-   sabokit init my-stack --env prod
-   #   prompts for base domain, scaleway region, ssh user/key
-   #   --non-interactive --base-domain example.com to skip prompts
-
-   # already have a consumer-template checkout? generate just the config:
-   #   cd existing-repo && sabokit config init
-
-   cd my-stack
-
-   you now have:
-     .sabokit/config.yml             (sabokit-cli scope, default_env: prod)
-     apps-manifest.yaml              (catalog from consumer-template)
-     environments/_template/         (copy this per new env)
-     environments/prod/              (your bootstrapped env)
-       config.tf.example             (edit + rename → config.tf)
-       backend.hcl.example
-       inventory.ini.example
-       preflight.sh, up.sh, configure.sh, secrets.tf
-     modules/stack/                  (shared TF wiring)
-
-2. set scaleway credentials
+1. set scaleway credentials
    -------------------------
    export SCW_ACCESS_KEY=...
    export SCW_SECRET_KEY=...
@@ -58,30 +36,40 @@ prerequisites:
    export SCW_DEFAULT_REGION=fr-par
    export SCW_DEFAULT_ZONE=fr-par-1
 
-3. arm64 hosts: set the platform (runner image is amd64-only)
-   ----------------------------------------------------------
+   # arm64 hosts: the runner image is amd64-only
    export SABOKIT_PLATFORM=linux/amd64
-   # default --image is ghcr.io/sheyaln/sabokit-runner (latest stable);
-   # override with SABOKIT_IMAGE=...:vX.Y.Z if you need a specific tag.
 
-4. fill in the env config
-   -----------------------
-   cd environments/prod
-   cp config.tf.example     config.tf      && $EDITOR config.tf
-   cp backend.hcl.example   backend.hcl    && $EDITOR backend.hcl
-   cp inventory.ini.example inventory.ini   # placeholder; sabokit up rewrites
-   cd ../..
+2. scaffold project + envs + state buckets in one shot
+   ---------------------------------------------------
+   sabokit init my-stack
+   #   interactive: prompts for base_domain, project UUID, org_slug,
+   #     org_name, infra_email, ssh user/key, first env name, staging y/n
+   #   non-interactive: pass --base-domain --scaleway-project-id
+   #     --org-slug --org-name --infra-email --env (--staging)
+   #
+   #   sabokit clones consumer-template, scaffolds environments/<env>/
+   #   with config.tf + backend.hcl pre-filled, and creates the scaleway
+   #   object bucket each env's TF state will live in.
 
-5. provision the env (terraform + ansible bootstrap + Authentik configure)
-   -----------------------------------------------------------------------
+   cd my-stack
+
+   # edit config.tf if you need anything beyond the prompted scalars
+   # (compute_hosts, identity tier_slots, per-app blocks)
+   $EDITOR environments/prod/config.tf
+
+3. provision the env end-to-end
+   ----------------------------
    sabokit up   # pure-Go orchestration:
-                #   tf apply → inventory regen → ssh wait → ansible bootstrap
-                #   → LE cert wait → blueprint indexing → tf apply (full)
+                #   preflight (config + creds + ssh key in IAM)
+                #   tf apply (base + identity_bootstrap)
+                #   inventory regen, ssh wait, ansible bootstrap
+                #   LE cert wait, blueprint indexing wait
+                #   full tf apply (identity + apps)
                 # uses hashicorp/terraform:1.9, sabokit-runner, scaleway/cli
-                # only host requirements: docker + ssh
-                # --skip-up / --skip-configure for re-runs
+                # only host requirements: docker + ssh + git
+                # --skip-preflight / --skip-up / --skip-configure for re-runs
 
-6. operate (env is auto from .sabokit/config.yml's default_env)
+4. operate (env is auto from .sabokit/config.yml's default_env)
    ------------------------------------------------------------
    sabokit apps list                        # catalog (what's available)
    sabokit apps list --enabled              # what's running in current env
@@ -101,7 +89,7 @@ prerequisites:
    # override env per-call:
    sabokit --env staging deploy --apps espocrm
 
-7. inspect or rotate secrets (independent of runner image)
+5. inspect or rotate secrets (independent of runner image)
    -------------------------------------------------------
    sabokit secrets list                          # clean 4-col table
    sabokit secrets list --tag authentik

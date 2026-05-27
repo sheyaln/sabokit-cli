@@ -13,21 +13,20 @@ binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override 
 ## quickstart
 
 ```bash
-sabokit init my-stack --env prod --base-domain example.com   # project + env in one shot
+export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
+export SABOKIT_PLATFORM=linux/amd64   # arm64 hosts only
+
+sabokit init my-stack
+# scaffolds project + env(s) + state buckets end-to-end. prompts for
+# base_domain, scaleway project UUID, org_slug, org_name, infra_email,
+# ssh user/key, first env (default prod), optional staging.
 
 cd my-stack
 
-export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
-# arm64 hosts: the runner image is amd64-only
-export SABOKIT_PLATFORM=linux/amd64
+# optionally tweak compute_hosts / identity / apps for your env
+$EDITOR environments/prod/config.tf
 
-# fill in the env config (consumer-template's own flow):
-cd environments/prod
-cp config.tf.example   config.tf   && $EDITOR config.tf
-cp backend.hcl.example backend.hcl && $EDITOR backend.hcl
-cp inventory.ini.example inventory.ini
-./preflight.sh && ./up.sh && ./configure.sh
-cd ../..
+sabokit up   # preflight + provision + configure, end-to-end
 
 # now sabokit takes over (env is auto from default_env):
 sabokit deploy --apps espocrm --check     # apps.yml --check
