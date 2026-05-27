@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 )
@@ -201,6 +202,124 @@ func (c *Client) PushVersion(secretID string, data []byte) (int, error) {
 func (c *Client) DeleteSecret(secretID string) error {
 	_, err := c.run([]string{"secret", "secret", "delete", "secret-id=" + secretID})
 	c.cachedIdx = nil
+	return err
+}
+
+// AccountProjectGet returns nil if the project ID resolves under the
+// current SCW credentials. Returns an error otherwise.
+func (c *Client) AccountProjectGet(projectID string) error {
+	_, err := c.run([]string{"account", "project", "get", "project-id=" + projectID})
+	return err
+}
+
+// SSHKey is one entry in `scw iam ssh-key list`.
+type SSHKey struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+}
+
+// ListSSHKeys returns every IAM ssh key under the given project. Empty
+// projectID lists across the user's whole org.
+func (c *Client) ListSSHKeys(projectID string) ([]SSHKey, error) {
+	args := []string{"iam", "ssh-key", "list", "-o", "json"}
+	if projectID != "" {
+		args = append(args, "project-id="+projectID)
+	}
+	raw, err := c.run(args)
+	if err != nil {
+		return nil, err
+	}
+	var keys []SSHKey
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("parse scw iam ssh-key list: %w", err)
+	}
+	return keys, nil
+}
+
+// EnsureSSHKey is idempotent — adds the given public key to the project's
+// IAM keystore if its body (first two whitespace-separated fields, eg.
+// `ssh-ed25519 AAAA...`) doesn't already appear there. Returns nil if a
+// match exists or the upload succeeds.
+func (c *Client) EnsureSSHKey(name, pubKeyContent, projectID string) error {
+	body := keyBody(pubKeyContent)
+	if body == "" {
+		return fmt.Errorf("invalid public key content")
+	}
+	existing, err := c.ListSSHKeys(projectID)
+	if err != nil {
+		return err
+	}
+	for _, k := range existing {
+		if keyBody(k.PublicKey) == body {
+			return nil
+		}
+	}
+	args := []string{
+		"iam", "ssh-key", "create",
+		"name=" + name,
+		"public-key=" + pubKeyContent,
+	}
+	if projectID != "" {
+		args = append(args, "project-id="+projectID)
+	}
+	_, err = c.run(args)
+	return err
+}
+
+// keyBody strips the comment field from an OpenSSH-format public key:
+// "ssh-ed25519 AAAA... user@host" → "ssh-ed25519 AAAA...". Robust to
+// re-uploads from machines whose hostname has changed.
+func keyBody(content string) string {
+	content = strings.TrimSpace(content)
+	parts := strings.Fields(content)
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + " " + parts[1]
+}
+
+// BucketExists returns true if a bucket with the given name exists in the
+// given region under the current SCW_DEFAULT_PROJECT_ID.
+func (c *Client) BucketExists(name, region string) (bool, error) {
+	args := []string{"object", "bucket", "list", "-o", "json"}
+	if region != "" {
+		args = append(args, "region="+region)
+	}
+	raw, err := c.run(args)
+	if err != nil {
+		return false, err
+	}
+	var buckets []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &buckets); err != nil {
+		return false, fmt.Errorf("parse scw object bucket list: %w", err)
+	}
+	for _, b := range buckets {
+		if b.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CreateBucket creates an S3 bucket. No-op + nil error if it already
+// exists (idempotent for first-run vs re-run). Returns error on any
+// other failure.
+func (c *Client) CreateBucket(name, region string) error {
+	exists, err := c.BucketExists(name, region)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	args := []string{"object", "bucket", "create", "name=" + name, "acl=private"}
+	if region != "" {
+		args = append(args, "region="+region)
+	}
+	_, err = c.run(args)
 	return err
 }
 
