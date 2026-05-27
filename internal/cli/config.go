@@ -59,7 +59,7 @@ refuses to overwrite an existing config without --force.`,
 	cmd.Flags().StringVar(&f.defaultEnv, "default-env", "", "default env (eg. prod); blank for unset")
 	cmd.Flags().StringVar(&f.region, "region", "fr-par", "scaleway region")
 	cmd.Flags().StringVar(&f.zone, "zone", "", "scaleway zone (default: <region>-1)")
-	cmd.Flags().StringVar(&f.sshUser, "ssh-user", "root", "ssh user")
+	cmd.Flags().StringVar(&f.sshUser, "ssh-user", "ubuntu", "ssh user")
 	cmd.Flags().StringVar(&f.sshKey, "ssh-key", "~/.ssh/id_ed25519", "ssh key path")
 	cmd.Flags().BoolVar(&f.nonInteractive, "non-interactive", false, "skip prompts; require all values via flags")
 	cmd.Flags().BoolVar(&f.force, "force", false, "overwrite an existing .sabokit/config.yml")

@@ -24,7 +24,7 @@ type configInputs struct {
 func defaultConfigInputs() configInputs {
 	return configInputs{
 		region:  "fr-par",
-		sshUser: "root",
+		sshUser: "ubuntu",
 		sshKey:  "~/.ssh/id_ed25519",
 	}
 }
@@ -67,7 +67,7 @@ func promptConfigInputs(in *configInputs, interactive bool) error {
 		in.zone = in.region + "-1"
 	}
 	if in.sshUser == "" {
-		in.sshUser = "root"
+		in.sshUser = "ubuntu"
 	}
 	if in.sshKey == "" {
 		in.sshKey = "~/.ssh/id_ed25519"

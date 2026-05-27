@@ -62,7 +62,7 @@ func TestPromptConfigInputsNonInteractiveDefaults(t *testing.T) {
 	if in.zone != "fr-par-1" {
 		t.Errorf("zone default = %q", in.zone)
 	}
-	if in.sshUser != "root" {
+	if in.sshUser != "ubuntu" {
 		t.Errorf("sshUser default = %q", in.sshUser)
 	}
 }
