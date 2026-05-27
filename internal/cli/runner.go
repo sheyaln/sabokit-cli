@@ -15,9 +15,13 @@ const (
 	terraformDir       = "/platform/terraform"
 )
 
-func baseInvocation(p *project.Project) docker.Invocation {
+func baseInvocation(p *project.Project) (docker.Invocation, error) {
+	workspace, err := p.WorkspaceDir(globals.Env)
+	if err != nil {
+		return docker.Invocation{}, err
+	}
 	mounts := []docker.Mount{
-		{Source: p.Root, Target: containerWorkspace},
+		{Source: workspace, Target: containerWorkspace},
 	}
 	env := map[string]string{}
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
@@ -36,7 +40,7 @@ func baseInvocation(p *project.Project) docker.Invocation {
 		Env:         env,
 		EnvPassthru: []string{"SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_PROJECT_ID", "SCW_DEFAULT_ORGANIZATION_ID", "SCW_DEFAULT_REGION", "SCW_DEFAULT_ZONE"},
 		TTY:         isTerminal(),
-	}
+	}, nil
 }
 
 func expandHome(p string) string {

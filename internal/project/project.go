@@ -16,6 +16,7 @@ const (
 type Config struct {
 	Project      string   `yaml:"project"`
 	BaseDomain   string   `yaml:"base_domain"`
+	DefaultEnv   string   `yaml:"default_env"`
 	Scaleway     Scaleway `yaml:"scaleway"`
 	SSH          SSH      `yaml:"ssh"`
 	Inventory    string   `yaml:"inventory"`
@@ -82,6 +83,54 @@ func (p *Project) InventoryPath() string {
 
 func (p *Project) AppsManifestPath() string {
 	return filepath.Join(p.Root, p.Config.AppsManifest)
+}
+
+// EnvName returns the effective env name (override > config default). Empty
+// string means "no env" — sabokit operates against the project root in that
+// mode (legacy / flat-layout projects).
+func (p *Project) EnvName(override string) string {
+	if override != "" {
+		return override
+	}
+	return p.Config.DefaultEnv
+}
+
+// WorkspaceDir returns the host path that should be mounted as /workspace
+// inside the runner container. When an env is set, that's
+// <root>/environments/<env>/; otherwise the project root.
+func (p *Project) WorkspaceDir(envOverride string) (string, error) {
+	env := p.EnvName(envOverride)
+	if env == "" {
+		return p.Root, nil
+	}
+	dir := filepath.Join(p.Root, "environments", env)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("environment %q not found: %s", env, dir)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("environment path %s is not a directory", dir)
+	}
+	return dir, nil
+}
+
+// AnsibleVarsPath returns the host path to .ansible-vars.json for the
+// current env, or "" when no env is configured.
+func (p *Project) AnsibleVarsPath(envOverride string) string {
+	dir, err := p.WorkspaceDir(envOverride)
+	if err != nil || p.EnvName(envOverride) == "" {
+		return ""
+	}
+	return filepath.Join(dir, ".ansible-vars.json")
+}
+
+// TFOutputPath returns the host path to .tf-output.json for the current env.
+func (p *Project) TFOutputPath(envOverride string) string {
+	dir, err := p.WorkspaceDir(envOverride)
+	if err != nil || p.EnvName(envOverride) == "" {
+		return ""
+	}
+	return filepath.Join(dir, ".tf-output.json")
 }
 
 type appsManifest struct {

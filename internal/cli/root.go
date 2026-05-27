@@ -16,6 +16,7 @@ type GlobalFlags struct {
 	Image    string
 	ScwImage string
 	Platform string
+	Env      string
 	Verbose  bool
 }
 
@@ -27,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 		defaultImage = env
 	}
 	defaultPlatform := os.Getenv("SABOKIT_PLATFORM")
+	defaultEnv := os.Getenv("SABOKIT_ENV")
 	defaultScwImage := DefaultScwImage
 	if env := os.Getenv("SABOKIT_SCW_IMAGE"); env != "" {
 		defaultScwImage = env
@@ -54,6 +56,7 @@ env vars:
   SABOKIT_IMAGE                       overrides --image default (runner for ansible/terraform)
   SABOKIT_SCW_IMAGE                   overrides --scw-image default (scaleway cli for secrets ops)
   SABOKIT_PLATFORM                    sets docker --platform (eg. linux/amd64 on arm64 hosts)
+  SABOKIT_ENV                         overrides .sabokit/config.yml default_env
 
 passed through to the runner image:
   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_PROJECT_ID,
@@ -69,6 +72,7 @@ passed through to the runner image:
 	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref for ansible/terraform (repository:tag); env: SABOKIT_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.ScwImage, "scw-image", defaultScwImage, "scaleway cli image ref for secrets ops; env: SABOKIT_SCW_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override (eg. linux/amd64); env: SABOKIT_PLATFORM")
+	cmd.PersistentFlags().StringVar(&globals.Env, "env", defaultEnv, "environment name under environments/<env>/; env: SABOKIT_ENV (overrides .sabokit/config.yml default_env)")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")
 
 	cmd.AddCommand(
