@@ -3,9 +3,11 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"text/tabwriter"
 
+	"github.com/sheyaln/sabokit-cli/internal/configtf"
 	"github.com/sheyaln/sabokit-cli/internal/project"
 	"github.com/spf13/cobra"
 )
@@ -106,18 +108,19 @@ func printEnabledApps(p *project.Project) error {
 func newAppsAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add <name>",
-		Short: "add an app — not yet implemented",
-		Long: `not yet implemented in v0.1.x.
+		Short: "enable an app in the current env's config.tf",
+		Long: `edits environments/<env>/config.tf:
+  - if <name> is commented out (`+"`# <name> = { ... }`"+`), uncomments the block
+  - if disabled (enabled = false), flips to enabled = true
+  - if absent, inserts a minimal block (with a FIXME hostname)
 
-apps are enabled per-env by editing environments/<env>/config.tf's
-locals.config.apps block. there is no project-root catalog edit; the
-catalog is producer-curated upstream.
-
-manual equivalent: edit config.tf, set apps.<name>.enabled = true, then
-re-run 'sabokit deploy --base' or the env's configure.sh.`,
+prints a next-step hint. requires an env. validates <name> against the
+upstream catalog (apps-manifest.yaml).`,
+		Example: `  sabokit apps add vikunja
+  sabokit --env staging apps add jitsi`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented("apps add")
+			return runAppsAdd(args[0])
 		},
 	}
 }
@@ -125,15 +128,95 @@ re-run 'sabokit deploy --base' or the env's configure.sh.`,
 func newAppsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <name>",
-		Short: "remove an app — not yet implemented",
-		Long: `not yet implemented in v0.1.x.
+		Short: "disable an app in the current env's config.tf",
+		Long: `sets <name>.enabled = false in environments/<env>/config.tf. inserts
+the line if the block is missing one. errors if the app is already
+disabled or absent.
 
-manual equivalent: edit environments/<env>/config.tf, set
-apps.<name>.enabled = false, then 'sabokit down --apps <name>' and
-'sabokit deploy --base' (or re-run configure.sh).`,
+prints a next-step hint suggesting 'sabokit down --apps <name>' to stop
+the containers, then 'sabokit deploy --base' (or configure.sh) to reflect
+the new TF plan.`,
+		Example: `  sabokit apps remove jitsi
+  sabokit --env staging apps remove decidim`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return notImplemented("apps remove")
+			return runAppsRemove(args[0])
 		},
 	}
+}
+
+func runAppsAdd(name string) error {
+	p, err := project.Load()
+	if err != nil {
+		return err
+	}
+	envDir, err := requireEnvDir(p)
+	if err != nil {
+		return err
+	}
+	if err := requireInCatalog(p, name); err != nil {
+		return err
+	}
+	path := filepath.Join(envDir, "config.tf")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w (run 'cp config.tf.example config.tf' first)", path, err)
+	}
+	out, err := configtf.AddApp(string(content), name)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("enabled %s in %s\n", name, path)
+	fmt.Printf("next: sabokit deploy --base   # apply the new TF plan + bootstrap the app\n")
+	return nil
+}
+
+func runAppsRemove(name string) error {
+	p, err := project.Load()
+	if err != nil {
+		return err
+	}
+	envDir, err := requireEnvDir(p)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(envDir, "config.tf")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	out, err := configtf.RemoveApp(string(content), name)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("disabled %s in %s\n", name, path)
+	fmt.Printf("next: sabokit down --apps %s   # stop containers\n", name)
+	fmt.Printf("      sabokit deploy --base       # apply the new TF plan\n")
+	return nil
+}
+
+func requireEnvDir(p *project.Project) (string, error) {
+	if p.EnvName(globals.Env) == "" {
+		return "", fmt.Errorf("an env is required (pass --env or set default_env in .sabokit/config.yml)")
+	}
+	return p.WorkspaceDir(globals.Env)
+}
+
+func requireInCatalog(p *project.Project, name string) error {
+	cat, err := p.Catalog()
+	if err != nil {
+		return err
+	}
+	for _, a := range cat {
+		if a.ID == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is not in the apps catalog — run 'sabokit apps list' to see valid names", name)
 }
