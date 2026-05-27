@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheyaln/sabokit-cli/internal/ansiblevars"
 	"github.com/sheyaln/sabokit-cli/internal/configtf"
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/inventory"
@@ -46,24 +45,25 @@ every step calls docker images directly:
 
 phases:
   preflight:
-    0. verify config.tf/backend.hcl present + required keys non-empty;
-       SCW creds reach the project; ssh public key uploaded to scaleway
-       IAM keystore (uploaded automatically if missing).
-  up:
+    config.tf + backend.hcl present, required keys non-empty,
+    SCW creds reach the project, ssh public key uploaded to scaleway IAM.
+  up (1/7..7/7):
     1. terraform init + apply (base + identity_bootstrap)
-    2. write .tf-output.json
-    3. regenerate inventory.ini from compute_hosts
-    4. clear stale known_hosts entries
-    5. wait for SSH on every host (port 22)
-    6. write .ansible-vars.json (subset of TF outputs)
-    7. ansible-playbook bootstrap.yml
-    8. wait for Let's Encrypt cert on the gateway
-    9. wait for Authentik blueprints + RBAC permissions to index
-  configure:
-    10. read Authentik admin token from scaleway secret
-    11. import authentik_outpost.embedded if not already in state
-    12. full terraform apply with -var authentik_admin_token=...
-    13. refresh .tf-output.json + .ansible-vars.json
+    2. refresh .tf-output.json, inventory.ini, .ansible-vars.json
+    3. clear stale known_hosts entries
+    4. wait for SSH on every host (port 22)
+    5. ansible-playbook bootstrap.yml
+    6. wait for Let's Encrypt cert on the gateway
+    7. wait for Authentik blueprints + RBAC permissions to index
+  configure (1/4..4/4):
+    1. read Authentik admin token from scaleway secret
+    2. import authentik_outpost.embedded if not already in state
+    3. full terraform apply with -var authentik_admin_token=...
+    4. refresh .tf-output.json + inventory.ini + .ansible-vars.json
+
+deploy/down/status also re-run the refresh step automatically before any
+ansible/tf call — inventory.ini is always derived from current TF state.
+opt out with --skip-refresh on any of those commands.
 
 requires env's config.tf, backend.hcl, inventory.ini in place. uses
 SCW_ACCESS_KEY / SCW_SECRET_KEY from the environment for terraform's
@@ -145,7 +145,7 @@ func phase(msg string) {
 // Mirrors the original preflight.sh sans the dep-install checks (those
 // don't apply in pure-Go mode — tools come from docker images).
 func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Client) error {
-	phase("0/13 preflight")
+	phase("preflight")
 
 	required := []string{"config.tf", "backend.hcl"}
 	for _, f := range required {
@@ -211,7 +211,7 @@ func ensureSSHKeyUploaded(p *project.Project, envName, projectID string, scwClie
 // inventory regen, ssh-wait, ansible bootstrap, LE cert wait, blueprint
 // indexing wait.
 func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client, scwClient *scw.Client, f *upFlags) error {
-	phase("1/9 terraform init + apply (base + identity_bootstrap)")
+	phase("1/7 terraform init + apply (base + identity_bootstrap)")
 	if err := tfClient.Init(envDir, f.backendConfig); err != nil {
 		return fmt.Errorf("terraform init: %w", err)
 	}
@@ -222,21 +222,9 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		return fmt.Errorf("terraform apply (bootstrap): %w", err)
 	}
 
-	phase("2/9 capturing terraform output to .tf-output.json")
-	tfOut, err := tfClient.Output(envDir)
+	phase("2/7 refreshing .tf-output.json, inventory.ini, .ansible-vars.json")
+	tfOut, err := refreshEnvState(envDir, envName, tfClient)
 	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(envDir, ".tf-output.json"), tfOut, 0o644); err != nil {
-		return err
-	}
-
-	phase("3/9 regenerating inventory.ini from compute_hosts")
-	ini, err := inventory.FromTFOutput(envName, tfOut)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(envDir, "inventory.ini"), []byte(ini), 0o644); err != nil {
 		return err
 	}
 
@@ -245,12 +233,12 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		return err
 	}
 
-	phase("4/9 clearing stale known_hosts entries")
+	phase("3/7 clearing stale known_hosts entries")
 	if err := pruneKnownHosts(hostIPs); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: prune known_hosts: %v\n", err)
 	}
 
-	phase(fmt.Sprintf("5/9 waiting for SSH on %d host(s)", len(hostIPs)))
+	phase(fmt.Sprintf("4/7 waiting for SSH on %d host(s)", len(hostIPs)))
 	for _, ip := range hostIPs {
 		fmt.Printf("    waiting for %s:22 ...\n", ip)
 		if err := wait.TCP(ip+":22", wait.DefaultTCP()); err != nil {
@@ -258,31 +246,22 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		}
 	}
 
-	phase("6/9 writing .ansible-vars.json (subset of TF outputs)")
-	vars, err := ansiblevars.Project(tfOut)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(envDir, ".ansible-vars.json"), vars, 0o644); err != nil {
-		return err
-	}
-
 	gateway, err := readGatewayDomain(envDir)
 	if err != nil {
 		return err
 	}
 
-	phase("7/9 ansible-playbook bootstrap.yml")
+	phase("5/7 ansible-playbook bootstrap.yml")
 	if err := runAnsibleBootstrap(p, envName, envDir, gateway); err != nil {
 		return err
 	}
 
-	phase(fmt.Sprintf("8/9 waiting for Let's Encrypt cert on https://%s", gateway))
+	phase(fmt.Sprintf("6/7 waiting for Let's Encrypt cert on https://%s", gateway))
 	if err := waitLECert(envName, envDir, gateway, hostIPs); err != nil {
 		return err
 	}
 
-	phase("9/9 waiting for Authentik blueprints + RBAC to index")
+	phase("7/7 waiting for Authentik blueprints + RBAC to index")
 	if err := waitAuthentikIndexing(scwClient, gateway, tfOut); err != nil {
 		return err
 	}
@@ -298,7 +277,7 @@ func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *
 		return fmt.Errorf("read %s: %w (run sabokit up without --skip-up first)", tfOutPath, err)
 	}
 
-	phase("10/13 reading Authentik admin token from Scaleway")
+	phase("configure 1/4 reading Authentik admin token from Scaleway")
 	adminToken, err := readAuthentikAdminToken(scwClient, tfOut)
 	if err != nil {
 		return err
@@ -309,12 +288,12 @@ func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *
 		return err
 	}
 
-	phase("11/13 reconciling Authentik embedded outpost in TF state")
+	phase("configure 2/4 reconciling Authentik embedded outpost in TF state")
 	if err := reconcileOutpost(tfClient, envDir, gateway, adminToken); err != nil {
 		return err
 	}
 
-	phase(fmt.Sprintf("12/13 terraform apply (full, parallelism=%d)", f.parallelism))
+	phase(fmt.Sprintf("configure 3/4 terraform apply (full, parallelism=%d)", f.parallelism))
 	if err := tfClient.Apply(envDir, tf.ApplyOpts{
 		AutoApprove: true,
 		Parallelism: f.parallelism,
@@ -323,19 +302,8 @@ func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *
 		return err
 	}
 
-	phase("13/13 refreshing .tf-output.json + .ansible-vars.json")
-	tfOut, err = tfClient.Output(envDir)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(tfOutPath, tfOut, 0o644); err != nil {
-		return err
-	}
-	vars, err := ansiblevars.Project(tfOut)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(envDir, ".ansible-vars.json"), vars, 0o644); err != nil {
+	phase("configure 4/4 refreshing .tf-output.json + inventory.ini + .ansible-vars.json")
+	if _, err := refreshEnvState(envDir, envName, tfClient); err != nil {
 		return err
 	}
 	return nil
