@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,8 +81,22 @@ func runInit(projectName string, f *initFlags) error {
 		return err
 	}
 
-	if err := resolveInitInputs(f); err != nil {
+	inputs := configInputs{
+		project:    projectName,
+		baseDomain: f.baseDomain,
+		defaultEnv: f.env,
+		region:     coalesce(f.region, "fr-par"),
+		zone:       f.zone,
+		sshUser:    coalesce(f.sshUser, "root"),
+		sshKey:     coalesce(f.sshKey, "~/.ssh/id_ed25519"),
+	}
+	if err := promptConfigInputs(&inputs, !f.nonInteractive); err != nil {
 		return err
+	}
+	// init sources project name from positional arg, not prompts — pin it.
+	inputs.project = projectName
+	if f.env != "" {
+		inputs.defaultEnv = f.env
 	}
 
 	fmt.Printf("cloning %s @ %s\n", f.templateRepo, f.templateTag)
@@ -105,7 +118,7 @@ func runInit(projectName string, f *initFlags) error {
 		fmt.Printf("bootstrapped environments/%s/ from _template\n", f.env)
 	}
 
-	if err := writeProjectConfig(target, projectName, f); err != nil {
+	if _, err := writeConfigYAML(target, inputs); err != nil {
 		return err
 	}
 
@@ -172,52 +185,9 @@ func ensureTargetReady(target string) error {
 	return nil
 }
 
-func resolveInitInputs(f *initFlags) error {
-	if f.nonInteractive {
-		if f.baseDomain == "" {
-			return fmt.Errorf("--base-domain is required in --non-interactive mode")
-		}
-	} else {
-		r := bufio.NewReader(os.Stdin)
-		if f.baseDomain == "" {
-			f.baseDomain = prompt(r, "base domain (eg. example.com): ", "")
-		}
-		f.region = prompt(r, fmt.Sprintf("scaleway region [%s]: ", f.region), f.region)
-		f.sshUser = prompt(r, fmt.Sprintf("ssh user [%s]: ", f.sshUser), f.sshUser)
-		f.sshKey = prompt(r, fmt.Sprintf("ssh key path [%s]: ", f.sshKey), f.sshKey)
-	}
-	if f.baseDomain == "" {
-		return fmt.Errorf("base domain is required")
-	}
-	if f.zone == "" {
-		f.zone = f.region + "-1"
-	}
-	return nil
-}
-
-func prompt(r *bufio.Reader, label, fallback string) string {
-	fmt.Print(label)
-	line, _ := r.ReadString('\n')
-	line = strings.TrimSpace(line)
-	if line == "" {
+func coalesce(s, fallback string) string {
+	if s == "" {
 		return fallback
 	}
-	return line
-}
-
-func writeProjectConfig(target, projectName string, f *initFlags) error {
-	dir := filepath.Join(target, ".sabokit")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "config.yml")
-	var b strings.Builder
-	fmt.Fprintf(&b, "project: %s\n", projectName)
-	fmt.Fprintf(&b, "base_domain: %s\n", f.baseDomain)
-	if f.env != "" {
-		fmt.Fprintf(&b, "default_env: %s\n", f.env)
-	}
-	fmt.Fprintf(&b, "scaleway:\n  region: %s\n  zone: %s\n", f.region, f.zone)
-	fmt.Fprintf(&b, "ssh:\n  user: %s\n  key: %s\n", f.sshUser, f.sshKey)
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return s
 }
