@@ -8,7 +8,7 @@ cli for deploying and operating federated-commons stacks. shells out to the `sab
 curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/master/install.sh | bash
 ```
 
-binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v0.1.0`.
+binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v2026.05.0` (calver: `vYYYY.MM.PATCH`).
 
 ## quickstart
 
@@ -92,7 +92,7 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 
 ## status
 
-beta. v0.1.6 is feature-complete for the v0.1.x line: `init`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list/add/remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`.
+beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list|add|remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are calver `vYYYY.MM.PATCH`.
 
 execution models per command:
 - **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). Default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`; playbooks at `/opt/sabokit/platform/ansible/`. amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
