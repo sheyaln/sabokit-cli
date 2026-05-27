@@ -69,15 +69,17 @@ prerequisites:
    cd environments/prod
    cp config.tf.example     config.tf      && $EDITOR config.tf
    cp backend.hcl.example   backend.hcl    && $EDITOR backend.hcl
-   cp inventory.ini.example inventory.ini
+   cp inventory.ini.example inventory.ini   # placeholder; sabokit up rewrites
    cd ../..
 
-5. provision the env (terraform + ansible bootstrap + configure)
-   -------------------------------------------------------------
-   sabokit up   # chains preflight.sh + up.sh + configure.sh locally
-                #   FED_COMMONS_DIR is auto-cloned to .sabokit/sabokit-repo/
-                #   requires terraform, ansible, scw, jq, python3, nc, ssh on PATH
-                #   --skip-preflight / --skip-up / --skip-configure for re-runs
+5. provision the env (terraform + ansible bootstrap + Authentik configure)
+   -----------------------------------------------------------------------
+   sabokit up   # pure-Go orchestration:
+                #   tf apply → inventory regen → ssh wait → ansible bootstrap
+                #   → LE cert wait → blueprint indexing → tf apply (full)
+                # uses hashicorp/terraform:1.9, sabokit-runner, scaleway/cli
+                # only host requirements: docker + ssh
+                # --skip-up / --skip-configure for re-runs
 
 6. operate (env is auto from .sabokit/config.yml's default_env)
    ------------------------------------------------------------

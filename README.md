@@ -49,7 +49,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | --- | --- |
 | `sabokit init <name> [--env X --base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, optionally bootstrap `environments/<env>/`, write `.sabokit/config.yml` |
 | `sabokit config init [--force]` / `sabokit config show` | interactively (re)generate `.sabokit/config.yml` in cwd, or print the loaded config + path |
-| `sabokit up [--skip-preflight --skip-up --skip-configure --template-tag T]` | chain `preflight.sh && up.sh && configure.sh` locally in the env dir; auto-clones `FED_COMMONS_DIR` to `.sabokit/sabokit-repo/` |
+| `sabokit up [--skip-up --skip-configure --backend-config F --parallelism N]` | full first-deploy in pure Go — terraform via `hashicorp/terraform:1.9`, ansible via sabokit-runner, secrets via scaleway/cli. No local terraform/ansible/scw/python required. |
 | `sabokit deploy [--apps X --servers Y --base --rotate-secrets --check --overlay F]` | ansible-playbook apps.yml (or site.yml with --base) against `environments/<env>/` |
 | `sabokit down --apps X [--servers Y]` | ansible-playbook down.yml — stop containers, leave cloud resources |
 | `sabokit destroy {--apps X[,Y] \| --layer base\|identity\|apps \| --all} [-y]` | local `terraform destroy` in the env dir with the right `-target=` |
@@ -96,8 +96,9 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 beta. v0.1.6 is feature-complete for the v0.1.x line: `init`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list/add/remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`.
 
 execution models per command:
-- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section). Default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`; playbooks at `/opt/sabokit/platform/ansible/`. Image is amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
-- **docker (scaleway/cli image)**: `secrets *`. Decoupled from the runner image.
-- **local shell**: `up` (chains the consumer-template scripts), `destroy` (terraform destroy in the env dir), `apps add/remove` (config.tf editing), `init` (git clone + copy), `ssh`, `logs` (ssh + remote docker).
+- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). Default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`; playbooks at `/opt/sabokit/platform/ansible/`. amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
+- **docker (hashicorp/terraform image)**: `up` (TF apply/output/import), `destroy`. Default `hashicorp/terraform:1.9`; override with `--tf-image` / `SABOKIT_TF_IMAGE`.
+- **docker (scaleway/cli image)**: `secrets *`, `up` (reading the Authentik admin secret). Decoupled from the runner image.
+- **local**: `init` (git clone + copy of consumer-template into your project dir), `ssh` (`ssh user@host` passthrough), `logs` (ssh + remote docker), `apps add/remove` (config.tf editing).
 
-`up` requires local `terraform`, `ansible`, `scw`, `jq`, `python3`, `awk`, `nc`, `ssh`, `ssh-keygen` — the same deps the underlying scripts have always needed.
+the only host requirements are `docker` + `ssh` (+ `git` for `sabokit init`). no terraform, ansible, scw, jq, python3, awk, nc, ssh-keygen on the host. nothing else gets cloned or cached locally beyond what `init` writes into your project dir.
