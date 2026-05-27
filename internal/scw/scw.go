@@ -212,6 +212,65 @@ func (c *Client) AccountProjectGet(projectID string) error {
 	return err
 }
 
+// DNSZone mirrors one entry from `scw dns zone list -o json`. We only
+// care about the apex-zone shape (subdomain == "") + the NS list to
+// confirm the zone is delegated to scaleway.
+type DNSZone struct {
+	Domain    string   `json:"domain"`
+	Subdomain string   `json:"subdomain"`
+	NS        []string `json:"ns"`
+	NSDefault []string `json:"ns_default"`
+	Status    string   `json:"status"`
+}
+
+// ListDNSZones returns every DNS zone visible to the current credentials.
+func (c *Client) ListDNSZones() ([]DNSZone, error) {
+	raw, err := c.run([]string{"dns", "zone", "list", "-o", "json"})
+	if err != nil {
+		return nil, err
+	}
+	var zones []DNSZone
+	if err := json.Unmarshal(raw, &zones); err != nil {
+		return nil, fmt.Errorf("parse scw dns zone list: %w", err)
+	}
+	return zones, nil
+}
+
+// FindApexZone returns the apex zone (subdomain == "") matching `domain`.
+// Returns nil + nil if not found, error on transport failure.
+func (c *Client) FindApexZone(domain string) (*DNSZone, error) {
+	zones, err := c.ListDNSZones()
+	if err != nil {
+		return nil, err
+	}
+	for i := range zones {
+		z := &zones[i]
+		if z.Subdomain == "" && z.Domain == domain {
+			return z, nil
+		}
+	}
+	return nil, nil
+}
+
+// IsDelegatedToScaleway reports whether the zone's authoritative
+// nameservers point at scaleway. NS values may include trailing dots —
+// strip before comparing.
+func IsDelegatedToScaleway(z *DNSZone) bool {
+	if z == nil {
+		return false
+	}
+	for _, ns := range append(append([]string{}, z.NS...), z.NSDefault...) {
+		trimmed := ns
+		if l := len(trimmed); l > 0 && trimmed[l-1] == '.' {
+			trimmed = trimmed[:l-1]
+		}
+		if trimmed == "ns0.dom.scw.cloud" || trimmed == "ns1.dom.scw.cloud" {
+			return true
+		}
+	}
+	return false
+}
+
 // SSHKey is one entry in `scw iam ssh-key list`.
 type SSHKey struct {
 	ID        string `json:"id"`

@@ -86,6 +86,27 @@ func TestAccessVersionDecodesBase64(t *testing.T) {
 	}
 }
 
+func TestIsDelegatedToScaleway(t *testing.T) {
+	cases := []struct {
+		name string
+		zone *DNSZone
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty NS", &DNSZone{Domain: "example.org"}, false},
+		{"delegated via NS", &DNSZone{NS: []string{"ns0.dom.scw.cloud", "ns1.dom.scw.cloud"}}, true},
+		{"delegated with trailing dot", &DNSZone{NS: []string{"ns0.dom.scw.cloud.", "ns1.dom.scw.cloud."}}, true},
+		{"delegated via NSDefault only", &DNSZone{NSDefault: []string{"ns0.dom.scw.cloud", "ns1.dom.scw.cloud"}}, true},
+		{"third-party NS", &DNSZone{NS: []string{"ns1.cloudflare.com", "ns2.cloudflare.com"}}, false},
+	}
+	for _, tc := range cases {
+		got := IsDelegatedToScaleway(tc.zone)
+		if got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestParseRevision(t *testing.T) {
 	cases := []struct {
 		in      string
