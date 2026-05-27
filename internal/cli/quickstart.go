@@ -34,6 +34,9 @@ prerequisites:
    #   prompts for base domain, scaleway region, ssh user/key
    #   --non-interactive --base-domain example.com to skip prompts
 
+   # already have a consumer-template checkout? generate just the config:
+   #   cd existing-repo && sabokit config init
+
    cd my-stack
 
    you now have:

@@ -48,6 +48,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | command | what |
 | --- | --- |
 | `sabokit init <name> [--env X --base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, optionally bootstrap `environments/<env>/`, write `.sabokit/config.yml` |
+| `sabokit config init [--force]` / `sabokit config show` | interactively (re)generate `.sabokit/config.yml` in cwd, or print the loaded config + path |
 | `sabokit up [--skip-preflight --skip-up --skip-configure --template-tag T]` | chain `preflight.sh && up.sh && configure.sh` locally in the env dir; auto-clones `FED_COMMONS_DIR` to `.sabokit/sabokit-repo/` |
 | `sabokit deploy [--apps X --servers Y --base --rotate-secrets --check --overlay F]` | ansible-playbook apps.yml (or site.yml with --base) against `environments/<env>/` |
 | `sabokit down --apps X [--servers Y]` | ansible-playbook down.yml — stop containers, leave cloud resources |
