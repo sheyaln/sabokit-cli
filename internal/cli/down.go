@@ -6,12 +6,13 @@ import (
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/project"
+	"github.com/sheyaln/sabokit-cli/internal/tf"
 	"github.com/spf13/cobra"
 )
 
 func newDownCmd() *cobra.Command {
 	var apps, servers []string
-	var dryRun bool
+	var dryRun, skipRefresh bool
 	cmd := &cobra.Command{
 		Use:   "down",
 		Short: "stop apps (docker compose down) without destroying cloud resources",
@@ -32,19 +33,28 @@ runs against the sabokit-runner image (defaults to the version in
 			if len(apps) == 0 {
 				return fmt.Errorf("--apps is required")
 			}
-			return runDown(apps, servers, dryRun)
+			return runDown(apps, servers, dryRun, skipRefresh)
 		},
 	}
 	cmd.Flags().StringSliceVar(&apps, "apps", nil, "apps to stop (required)")
 	cmd.Flags().StringSliceVar(&servers, "servers", nil, "restrict to specific hosts")
 	cmd.Flags().BoolVar(&dryRun, "print", false, "print the docker invocation without running it")
+	cmd.Flags().BoolVar(&skipRefresh, "skip-refresh", false, "skip re-running terraform output to rebuild inventory.ini + .ansible-vars.json")
 	return cmd
 }
 
-func runDown(apps, servers []string, dryRun bool) error {
+func runDown(apps, servers []string, dryRun, skipRefresh bool) error {
 	p, err := project.Load()
 	if err != nil {
 		return err
+	}
+	if !dryRun && !skipRefresh {
+		if err := docker.Preflight(); err != nil {
+			return err
+		}
+		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform)); err != nil {
+			return err
+		}
 	}
 
 	cmd := []string{

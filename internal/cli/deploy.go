@@ -9,6 +9,7 @@ import (
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/project"
+	"github.com/sheyaln/sabokit-cli/internal/tf"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +21,7 @@ type deployFlags struct {
 	check         bool
 	overlay       string
 	dryRun        bool
+	skipRefresh   bool
 }
 
 func newDeployCmd() *cobra.Command {
@@ -72,6 +74,7 @@ flag semantics:
 	cmd.Flags().BoolVar(&f.check, "check", false, "ansible --check (dry run)")
 	cmd.Flags().StringVar(&f.overlay, "overlay", "", "extra inventory overlay file (relative to env dir)")
 	cmd.Flags().BoolVar(&f.dryRun, "print", false, "print the docker invocation without running it")
+	cmd.Flags().BoolVar(&f.skipRefresh, "skip-refresh", false, "skip re-running terraform output to rebuild inventory.ini + .ansible-vars.json")
 	return cmd
 }
 
@@ -80,6 +83,14 @@ func runDeploy(f *deployFlags) error {
 	if err != nil {
 		return err
 	}
+	if !f.dryRun && !f.skipRefresh {
+		if err := docker.Preflight(); err != nil {
+			return err
+		}
+		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform)); err != nil {
+			return err
+		}
+	}
 	inv, err := buildDeployInvocation(p, f)
 	if err != nil {
 		return err
@@ -87,9 +98,6 @@ func runDeploy(f *deployFlags) error {
 	if f.dryRun {
 		fmt.Println("docker", strings.Join(inv.Args(), " "))
 		return nil
-	}
-	if err := docker.Preflight(); err != nil {
-		return err
 	}
 	return inv.Command().Run()
 }

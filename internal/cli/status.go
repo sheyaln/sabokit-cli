@@ -11,12 +11,13 @@ import (
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/project"
+	"github.com/sheyaln/sabokit-cli/internal/tf"
 	"github.com/spf13/cobra"
 )
 
 func newStatusCmd() *cobra.Command {
 	var apps, servers []string
-	var dryRun bool
+	var dryRun, skipRefresh bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "terraform output + container state per host",
@@ -40,16 +41,17 @@ host-side json parsing.`,
   sabokit status --apps espocrm,authentik
   sabokit status --print     # docker invocation only`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(apps, servers, dryRun)
+			return runStatus(apps, servers, dryRun, skipRefresh)
 		},
 	}
 	cmd.Flags().StringSliceVar(&apps, "apps", nil, "filter container list by app name")
 	cmd.Flags().StringSliceVar(&servers, "servers", nil, "restrict to specific hosts")
 	cmd.Flags().BoolVar(&dryRun, "print", false, "print the docker invocation without running it")
+	cmd.Flags().BoolVar(&skipRefresh, "skip-refresh", false, "skip re-running terraform output to refresh .tf-output.json + inventory.ini")
 	return cmd
 }
 
-func runStatus(apps, servers []string, dryRun bool) error {
+func runStatus(apps, servers []string, dryRun, skipRefresh bool) error {
 	p, err := project.Load()
 	if err != nil {
 		return err
@@ -64,13 +66,20 @@ func runStatus(apps, servers []string, dryRun bool) error {
 		return nil
 	}
 
+	if err := docker.Preflight(); err != nil {
+		return err
+	}
+
+	if !skipRefresh {
+		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform)); err != nil {
+			return err
+		}
+	}
+
 	fmt.Println("== terraform outputs ==")
 	printTFOutputs(p, globals.Env)
 	fmt.Println()
 
-	if err := docker.Preflight(); err != nil {
-		return err
-	}
 	fmt.Println("== container state ==")
 	return printContainerState(p, apps, servers)
 }
