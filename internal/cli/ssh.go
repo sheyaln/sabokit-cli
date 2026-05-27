@@ -39,7 +39,7 @@ func runSSH(host string) error {
 	}
 	user := p.Config.SSH.User
 	if user == "" {
-		user = "root"
+		user = "ubuntu"
 	}
 
 	bin, err := exec.LookPath("ssh")

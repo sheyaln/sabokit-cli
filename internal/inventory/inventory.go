@@ -30,7 +30,7 @@ func Render(envName string, hosts map[string]ComputeHost) string {
 	for short, h := range hosts {
 		user := h.AnsibleUser
 		if user == "" {
-			user = "root"
+			user = "ubuntu"
 		}
 		line := fmt.Sprintf("%s-%s ansible_host=%s ansible_user=%s", short, envName, h.PublicIP, user)
 		groups := dedupe(append([]string{h.AnsibleGroup}, h.AnsibleGroups...))

@@ -48,8 +48,8 @@ func TestRenderDefaultUser(t *testing.T) {
 		"apps": {PublicIP: "51.1.1.1", AnsibleGroup: "apps"},
 	}
 	got := Render("dev", hosts)
-	if !strings.Contains(got, "ansible_user=root") {
-		t.Errorf("expected default user=root: %s", got)
+	if !strings.Contains(got, "ansible_user=ubuntu") {
+		t.Errorf("expected default user=ubuntu: %s", got)
 	}
 }
 

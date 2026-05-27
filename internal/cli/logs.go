@@ -78,7 +78,7 @@ func runLogs(app string, servers []string, container, group string, tail int, fo
 	}
 	user := p.Config.SSH.User
 	if user == "" {
-		user = "root"
+		user = "ubuntu"
 	}
 
 	dockerCmd := []string{"docker", "logs", "--tail", strconv.Itoa(tail)}
