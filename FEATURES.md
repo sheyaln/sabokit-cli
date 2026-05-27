@@ -16,8 +16,8 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 | --- | --- | --- |
 | `sabokit init` interactive scaffolding | prompts; project + env(s); per-env `config.tf` + `backend.hcl`; `.gitignore` + `.envrc.example` + `README.md` scaffolds; staging-default-YES; `==> ok` progress cadence | — |
 | State bucket creation | per-env idempotent create via `scaleway/cli`; versioning enabled; `acl=private`; name-length (≤63) precheck | block-public-access (scw doesn't expose a flag; `acl=private` is canonical) |
-| Preflight (phase 0 of `up`) | config keys + SCW creds + IAM ssh-key upload | DNS-zone-delegation check; gateway-domain `dig` propagation wait |
-| `sabokit up` end-to-end | preflight + tf apply + refresh + ansible bootstrap + LE-cert wait + Authentik index wait + full apply + outpost import | `terraform plan` with human-confirm gate (prod default-confirm; `--no-confirm` opt-out) |
+| Preflight (phase 0 of `up`) | config keys + SCW creds + IAM ssh-key upload + DNS-zone-delegation check; gateway DNS propagation wait runs between bootstrap apply and LE-cert wait | — |
+| `sabokit up` end-to-end | preflight + plan+confirm+apply (bootstrap) + refresh + ansible bootstrap + DNS-propagation wait + LE-cert wait + Authentik index wait + plan+confirm+apply (configure) + outpost import. Plan-confirm gate defaults yes for non-prod, no for prod; `--no-confirm` bypasses both gates | — |
 | Inventory + `.ansible-vars.json` regen | refreshed before every up/deploy/down/status | — |
 | Two-pass Authentik | hidden behind `sabokit up` | — |
 | ubuntu default ssh user | all sabokit-side fallbacks | upstream `platform/ansible/ansible.cfg` cleanup — out of scope here |
@@ -34,7 +34,7 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 Each row is one branch, one commit-set, one tag. No PR ceremony; merge to master and tag.
 
 1. ~~**Foundation hardening**~~ — shipped v2026.05.1.
-2. **Preflight DNS + plan-confirm gate** — `scw dns zone list` delegation check; gateway-domain Go-side `net.LookupHost` propagation wait; `terraform plan` phase with human-confirm before `apply` (default-yes when env != "prod", `--no-confirm` opt-out).
+2. ~~**Preflight DNS + plan-confirm gate**~~ — shipped v2026.05.3.
 3. **`sabokit env add/list/switch`** — `env add <name> [--from <existing-env>]` adds an additional env. Without `--from`, reuses the init prompt + bucket flow. With `--from`, carbon-copies committable files from `environments/<existing-env>/` into `environments/<name>/` (config.tf, README.md, any moved.tf, providers.tf, secrets.tf, variables.tf, main.tf, *.example files) and **skips everything gitignored** (`terraform.tfvars`, `backend.hcl`, `inventory.ini`, `.terraform/`, `.terraform.lock.hcl`). Backend.hcl is regenerated for the new env (bucket name swap). Operator edits config.tf afterwards for env-specific values (project_id, domains, environment string). `env list` enumerates `environments/`. `env switch <name>` rewrites `.sabokit/config.yml` `default_env`.
 4. **`sabokit bump <tag>`** — rewrite every `?ref=…` pin under the consumer's TF, optionally bump a sibling sabokit submodule, prompt to run any `moved{}` migrations published in upstream's `consumer-template/modules/stack/migrations.tf` for the new tag.
 5. **`sabokit upgrade <tag>`** — `bump` + `deploy` chain. Pre-apply check refuses state-mutation if any legacy address exists that isn't mapped by a `moved{}` block in the consumer's migrations.tf (backrest-bucket foot-gun).
