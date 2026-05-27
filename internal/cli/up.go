@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,6 +30,7 @@ type upFlags struct {
 	skipConfigure bool
 	backendConfig string
 	parallelism   int
+	noConfirm     bool
 }
 
 func newUpCmd() *cobra.Command {
@@ -46,20 +49,27 @@ every step calls docker images directly:
 phases:
   preflight:
     config.tf + backend.hcl present, required keys non-empty,
-    SCW creds reach the project, ssh public key uploaded to scaleway IAM.
-  up (1/7..7/7):
-    1. terraform init + apply (base + identity_bootstrap)
+    SCW creds reach the project, ssh public key in scaleway IAM,
+    base_domain's DNS zone registered with scaleway.
+  up (1/8..8/8):
+    1. terraform init + plan + confirm + apply (base + identity_bootstrap)
     2. refresh .tf-output.json, inventory.ini, .ansible-vars.json
     3. clear stale known_hosts entries
     4. wait for SSH on every host (port 22)
     5. ansible-playbook bootstrap.yml
-    6. wait for Let's Encrypt cert on the gateway
-    7. wait for Authentik blueprints + RBAC permissions to index
+    6. wait for gateway DNS propagation
+    7. wait for Let's Encrypt cert on the gateway
+    8. wait for Authentik blueprints + RBAC permissions to index
   configure (1/4..4/4):
     1. read Authentik admin token from scaleway secret
     2. import authentik_outpost.embedded if not already in state
-    3. full terraform apply with -var authentik_admin_token=...
+    3. plan + confirm + apply (full, with -var authentik_admin_token=...)
     4. refresh .tf-output.json + inventory.ini + .ansible-vars.json
+
+every terraform apply runs 'terraform plan -out=.tfplan' first, prints
+the diff, and prompts before applying. default is yes in non-prod envs
+and no in prod. --no-confirm bypasses every prompt (auto-approve every
+apply; required for unattended runs).
 
 deploy/down/status also re-run the refresh step automatically before any
 ansible/tf call — inventory.ini is always derived from current TF state.
@@ -81,6 +91,7 @@ Scaleway provider and scw secret manager access.`,
 	cmd.Flags().BoolVar(&f.skipConfigure, "skip-configure", false, "skip phases 10-13 (configure.sh equivalent)")
 	cmd.Flags().StringVar(&f.backendConfig, "backend-config", "backend.hcl", "backend config filename inside the env dir")
 	cmd.Flags().IntVar(&f.parallelism, "parallelism", 3, "terraform -parallelism for the configure-phase apply")
+	cmd.Flags().BoolVar(&f.noConfirm, "no-confirm", false, "skip the plan-then-confirm gate (auto-approve every apply; required for unattended runs)")
 	return cmd
 }
 
@@ -139,6 +150,51 @@ func phase(msg string) {
 	fmt.Printf("==> %s\n", msg)
 }
 
+// planConfirmApply is the shared "show the plan, ask, apply" gate around
+// every terraform apply sabokit runs. When --no-confirm is set it falls
+// back to auto-approve. Otherwise: terraform plan -out=.tfplan streams
+// the diff to the user, confirmPlan reads y/n from stdin, and
+// terraform apply .tfplan commits the saved plan unchanged.
+func planConfirmApply(tfClient *tf.Client, envDir, envName string, opts tf.ApplyOpts, noConfirm bool) error {
+	if noConfirm {
+		opts.AutoApprove = true
+		return tfClient.Apply(envDir, opts)
+	}
+	if err := tfClient.Plan(envDir, opts); err != nil {
+		return fmt.Errorf("terraform plan: %w", err)
+	}
+	ok, err := confirmPlan(envName, os.Stdin)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("aborted by user")
+	}
+	return tfClient.ApplyPlan(envDir)
+}
+
+// confirmPlan prompts the operator after a `terraform plan`. Default is
+// yes for non-prod envs (Enter accepts), no for prod (Enter aborts).
+// Reads exactly one line from in.
+func confirmPlan(envName string, in io.Reader) (bool, error) {
+	isProd := envName == "prod"
+	if isProd {
+		fmt.Print("proceed with this plan? [y/N] ")
+	} else {
+		fmt.Print("proceed with this plan? [Y/n] ")
+	}
+	r := bufio.NewReader(in)
+	line, err := r.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line == "" {
+		return !isProd, nil
+	}
+	return line == "y" || line == "yes", nil
+}
+
 // runPreflight verifies the env is in a state where `up` can succeed:
 // required files present, config.tf has the keys it needs, SCW creds
 // work, and the user's SSH public key is in the project's IAM keystore.
@@ -183,6 +239,28 @@ func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Cli
 	if err := ensureSSHKeyUploaded(p, envName, projectID, scwClient); err != nil {
 		return err
 	}
+	if err := ensureDNSZoneDelegated(baseDomain, scwClient); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureDNSZoneDelegated confirms baseDomain's apex zone is registered
+// with scaleway and the zone is delegated to scaleway's nameservers.
+// Returns a clear error if missing; emits a warning (no fail) if the
+// zone is registered but delegated elsewhere — sabokit can still create
+// records, they just won't resolve until the user moves the NS records.
+func ensureDNSZoneDelegated(baseDomain string, scwClient *scw.Client) error {
+	zone, err := scwClient.FindApexZone(baseDomain)
+	if err != nil {
+		return fmt.Errorf("preflight: scw dns zone list: %w", err)
+	}
+	if zone == nil {
+		return fmt.Errorf("preflight: dns zone %q not registered with scaleway — add it in the scaleway console (DNS > Zones) before continuing", baseDomain)
+	}
+	if !scw.IsDelegatedToScaleway(zone) {
+		fmt.Fprintf(os.Stderr, "    warning: zone %q registered but not delegated to scaleway (NS: %v) — set NS records at your registrar to ns0.dom.scw.cloud / ns1.dom.scw.cloud, or A records won't resolve until you do\n", baseDomain, zone.NS)
+	}
 	return nil
 }
 
@@ -207,22 +285,21 @@ func ensureSSHKeyUploaded(p *project.Project, envName, projectID string, scwClie
 	return nil
 }
 
-// runUpPhases runs phases 1-9: terraform apply (base+identity_bootstrap),
-// inventory regen, ssh-wait, ansible bootstrap, LE cert wait, blueprint
+// runUpPhases runs phases 1-8: bootstrap apply (plan+confirm), refresh,
+// ssh wait, ansible bootstrap, DNS propagation, LE cert wait, blueprint
 // indexing wait.
 func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client, scwClient *scw.Client, f *upFlags) error {
-	phase("1/7 terraform init + apply (base + identity_bootstrap)")
+	phase("1/8 terraform init + plan + apply (base + identity_bootstrap)")
 	if err := tfClient.Init(envDir, f.backendConfig); err != nil {
 		return fmt.Errorf("terraform init: %w", err)
 	}
-	if err := tfClient.Apply(envDir, tf.ApplyOpts{
-		AutoApprove: true,
-		Targets:     []string{"module.stack.module.base", "module.stack.module.identity_bootstrap"},
-	}); err != nil {
-		return fmt.Errorf("terraform apply (bootstrap): %w", err)
+	if err := planConfirmApply(tfClient, envDir, envName, tf.ApplyOpts{
+		Targets: []string{"module.stack.module.base", "module.stack.module.identity_bootstrap"},
+	}, f.noConfirm); err != nil {
+		return fmt.Errorf("bootstrap apply: %w", err)
 	}
 
-	phase("2/7 refreshing .tf-output.json, inventory.ini, .ansible-vars.json")
+	phase("2/8 refreshing .tf-output.json, inventory.ini, .ansible-vars.json")
 	tfOut, err := refreshEnvState(envDir, envName, tfClient)
 	if err != nil {
 		return err
@@ -233,12 +310,12 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		return err
 	}
 
-	phase("3/7 clearing stale known_hosts entries")
+	phase("3/8 clearing stale known_hosts entries")
 	if err := pruneKnownHosts(hostIPs); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: prune known_hosts: %v\n", err)
 	}
 
-	phase(fmt.Sprintf("4/7 waiting for SSH on %d host(s)", len(hostIPs)))
+	phase(fmt.Sprintf("4/8 waiting for SSH on %d host(s)", len(hostIPs)))
 	for _, ip := range hostIPs {
 		fmt.Printf("    waiting for %s:22 ...\n", ip)
 		if err := wait.TCP(ip+":22", wait.DefaultTCP()); err != nil {
@@ -251,17 +328,22 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		return err
 	}
 
-	phase("5/7 ansible-playbook bootstrap.yml")
+	phase("5/8 ansible-playbook bootstrap.yml")
 	if err := runAnsibleBootstrap(p, envName, envDir, gateway); err != nil {
 		return err
 	}
 
-	phase(fmt.Sprintf("6/7 waiting for Let's Encrypt cert on https://%s", gateway))
+	phase(fmt.Sprintf("6/8 waiting for gateway DNS propagation (%s)", gateway))
+	if err := wait.Resolve(gateway, wait.DefaultResolve(), nil, nil); err != nil {
+		return fmt.Errorf("gateway DNS never resolved: %w (check NS delegation + A record)", err)
+	}
+
+	phase(fmt.Sprintf("7/8 waiting for Let's Encrypt cert on https://%s", gateway))
 	if err := waitLECert(envName, envDir, gateway, hostIPs); err != nil {
 		return err
 	}
 
-	phase("7/7 waiting for Authentik blueprints + RBAC to index")
+	phase("8/8 waiting for Authentik blueprints + RBAC to index")
 	if err := waitAuthentikIndexing(scwClient, gateway, tfOut); err != nil {
 		return err
 	}
@@ -293,13 +375,12 @@ func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *
 		return err
 	}
 
-	phase(fmt.Sprintf("configure 3/4 terraform apply (full, parallelism=%d)", f.parallelism))
-	if err := tfClient.Apply(envDir, tf.ApplyOpts{
-		AutoApprove: true,
+	phase(fmt.Sprintf("configure 3/4 terraform plan + apply (full, parallelism=%d)", f.parallelism))
+	if err := planConfirmApply(tfClient, envDir, envName, tf.ApplyOpts{
 		Parallelism: f.parallelism,
 		Vars:        map[string]string{"authentik_admin_token": adminToken},
-	}); err != nil {
-		return err
+	}, f.noConfirm); err != nil {
+		return fmt.Errorf("configure apply: %w", err)
 	}
 
 	phase("configure 4/4 refreshing .tf-output.json + inventory.ini + .ansible-vars.json")
