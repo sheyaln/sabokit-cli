@@ -18,9 +18,7 @@ sabokit init my-stack --env prod --base-domain example.com   # project + env in 
 cd my-stack
 
 export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
-# default runner image v3.0.0 is not yet published — point at the older one:
-export SABOKIT_IMAGE=ghcr.io/sheyaln/federated-commons-runner:v2.17.0
-# arm64 hosts also need:
+# arm64 hosts: the runner image is amd64-only
 export SABOKIT_PLATFORM=linux/amd64
 
 # fill in the env config (consumer-template's own flow):
@@ -63,7 +61,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | `sabokit version` | binary version + default runner image |
 
 global flags:
-- `--image <repo:tag>` (default `ghcr.io/sheyaln/sabokit-runner:v3.0.0`) — runner image for ansible/terraform; env `SABOKIT_IMAGE`
+- `--image <repo:tag>` (default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`) — runner image for ansible; env `SABOKIT_IMAGE`
 - `--scw-image <repo:tag>` (default `scaleway/cli:2.56`) — official scaleway cli image used for `secrets *`; env `SABOKIT_SCW_IMAGE`
 - `--platform <p>` — docker `--platform` override (eg. `linux/amd64` on arm64 hosts when an image is amd64-only); env `SABOKIT_PLATFORM`
 - `--env <name>` — environment name under `environments/<env>/`; overrides `.sabokit/config.yml`'s `default_env`; env `SABOKIT_ENV`
@@ -97,7 +95,7 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 beta. v0.1.6 is feature-complete for the v0.1.x line: `init`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list/add/remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`.
 
 execution models per command:
-- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section). Needs `sabokit-runner:v3.0.0+` for full surface (`down.yml`, `apps.yml`). Falls back to `federated-commons-runner:v2.17.0` for `deploy` only.
+- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section). Default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`; playbooks at `/opt/sabokit/platform/ansible/`. Image is amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
 - **docker (scaleway/cli image)**: `secrets *`. Decoupled from the runner image.
 - **local shell**: `up` (chains the consumer-template scripts), `destroy` (terraform destroy in the env dir), `apps add/remove` (config.tf editing), `init` (git clone + copy), `ssh`, `logs` (ssh + remote docker).
 

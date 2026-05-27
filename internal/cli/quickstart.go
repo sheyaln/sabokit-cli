@@ -55,11 +55,11 @@ prerequisites:
    export SCW_DEFAULT_REGION=fr-par
    export SCW_DEFAULT_ZONE=fr-par-1
 
-3. pick a runner image (the default v3.0.0 is not yet published)
-   -------------------------------------------------------------
-   export SABOKIT_IMAGE=ghcr.io/sheyaln/federated-commons-runner:v2.17.0
-   # arm64 hosts also need:
+3. arm64 hosts: set the platform (runner image is amd64-only)
+   ----------------------------------------------------------
    export SABOKIT_PLATFORM=linux/amd64
+   # default --image is ghcr.io/sheyaln/sabokit-runner (latest stable);
+   # override with SABOKIT_IMAGE=...:vX.Y.Z if you need a specific tag.
 
 4. fill in the env config
    -----------------------
