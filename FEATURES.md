@@ -45,10 +45,10 @@ Each row is one branch, one commit-set, one tag. No PR ceremony; merge to master
 
 ## Scaffolding non-negotiables
 
-Two rules the upstream operator has surfaced that affect what `sabokit init` ships:
+Two rules the upstream operator has surfaced (both **honored as of v2026.05.2**):
 
-- **`.tfvars` is for secrets only.** Never scaffold a `terraform.tfvars.example` or a `terraform.tfvars` file. Operator-facing configuration (which apps are on, hostnames, image tags, host-services knobs) lives in `config.tf` as a `locals.config` block plus a `module "stack"` call. `.tfvars` is reserved for the rare case of passing plaintext secret values at apply time (gitignored by default). Don't conflate "terraform variable" with the `.tfvars` file format.
-- **`inventory.ini.example` is misleading.** Upstream still ships a placeholder, but the real `inventory.ini` is generated from `terraform output -json compute_hosts` after apply. `sabokit init` should NOT copy the `.example` over; `sabokit up` writes the real file. Drop the placeholder from the scaffolded env tree.
+- **`.tfvars` is for secrets only.** Operator-facing config (apps, hostnames, image tags, host-services knobs) lives in `config.tf` as `locals.config` + `module "stack"`. The init setup wizard MAY write a `.tfvars` for plaintext-secret-at-apply-time. The `env add --from <env>` carbon-copy flow MUST NOT copy `.tfvars` across envs — each env's secrets are its own. `.gitignore` excludes `*.tfvars` and keeps `*.tfvars.example` tracked.
+- **`inventory.ini.example` is misleading.** The real `inventory.ini` is generated from `terraform output -json compute_hosts` on every `sabokit up`/`deploy`. `scaffoldEnv` strips the placeholder alongside the legacy bash orchestration scripts (`preflight.sh`, `up.sh`, `configure.sh`, `_lib.sh`) — sabokit-cli replaced them.
 
 ## Out of scope (won't build)
 
