@@ -8,7 +8,7 @@ import (
 
 const (
 	DefaultRunnerImage = "ghcr.io/sheyaln/sabokit-runner"
-	DefaultRunnerTag   = "v3.3.1"
+	DefaultRunnerTag   = "v0.1.0"
 	DefaultScwImage    = "scaleway/cli:2.56"
 	DefaultTFImage     = "hashicorp/terraform:1.9"
 )

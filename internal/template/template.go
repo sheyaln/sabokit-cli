@@ -13,7 +13,7 @@ type stderrBuf struct{ bytes.Buffer }
 
 const (
 	DefaultRepo = "https://github.com/sheyaln/sabokit"
-	DefaultTag  = "v3.2.1"
+	DefaultTag  = "v0.1.0"
 	subdir      = "consumer-template"
 )
 

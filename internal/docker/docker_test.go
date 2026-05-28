@@ -6,8 +6,8 @@ import (
 )
 
 func TestArgsMinimal(t *testing.T) {
-	got := Invocation{Image: "ghcr.io/sheyaln/sabokit-runner:v3.3.1"}.Args()
-	want := []string{"run", "--rm", "ghcr.io/sheyaln/sabokit-runner:v3.3.1"}
+	got := Invocation{Image: "ghcr.io/sheyaln/sabokit-runner:v0.1.0"}.Args()
+	want := []string{"run", "--rm", "ghcr.io/sheyaln/sabokit-runner:v0.1.0"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
