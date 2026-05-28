@@ -11,6 +11,7 @@ import (
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/scw"
 	"github.com/sheyaln/sabokit-cli/internal/template"
+	"github.com/sheyaln/sabokit-cli/internal/version"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -68,7 +69,7 @@ interactive mode (default) prompts for every required field; pass
 		},
 	}
 	cmd.Flags().StringVar(&f.templateRepo, "from-template-repo", template.DefaultRepo, "git repo to clone consumer-template from")
-	cmd.Flags().StringVar(&f.templateTag, "from-template-tag", template.DefaultTag, "tag/branch to clone")
+	cmd.Flags().StringVar(&f.templateTag, "from-template-tag", "", "blueprint tag/branch to clone (default: latest supported sabokit release)")
 	cmd.Flags().StringVar(&f.baseDomain, "base-domain", "", "base domain (eg. example.org)")
 	cmd.Flags().StringVar(&f.gatewayDomain, "gateway-domain", "", "Authentik gateway domain (default: auth.<base-domain>)")
 	cmd.Flags().StringVar(&f.scwProjectID, "scaleway-project-id", "", "scaleway project UUID")
@@ -108,6 +109,18 @@ func runInit(projectName string, f *initFlags) error {
 
 	if err := validateBucketNames(envs, f); err != nil {
 		return err
+	}
+
+	if f.templateTag == "" {
+		latest, err := template.LatestRef(f.templateRepo, version.SupportedBlueprintMax)
+		if err != nil {
+			return fmt.Errorf("resolve latest supported sabokit release: %w", err)
+		}
+		if latest == "" {
+			fmt.Fprintf(os.Stderr, "    no v%s.* sabokit release found yet — scaffolding from master\n", version.SupportedBlueprintMax)
+			latest = "master"
+		}
+		f.templateTag = latest
 	}
 
 	done := step(fmt.Sprintf("cloning consumer-template @ %s", f.templateTag))
@@ -438,7 +451,7 @@ func scaffoldEnv(projectRoot, envName string, f *initFlags) error {
 		return fmt.Errorf("environments/%s already exists", envName)
 	}
 	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("environments/_template not found in template (tag %s)", template.DefaultTag)
+		return fmt.Errorf("environments/_template not found in template (tag %s)", f.templateTag)
 	}
 	if err := template.CopyTree(src, dst); err != nil {
 		return err
@@ -514,7 +527,7 @@ func materialiseEnvValues(target string, envs []string, f *initFlags) error {
 		block := map[string]any{
 			"scaleway_project_id": f.scwProjectID,
 			"base_domain":         f.baseDomain,
-			"gateway_domain":      f.gatewayDomain,
+			"identity_domain":     f.gatewayDomain,
 			"infra_email":         f.infraEmail,
 			"scaleway_region":     f.region,
 			"scaleway_zone":       f.zone,

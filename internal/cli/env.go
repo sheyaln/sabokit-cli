@@ -124,7 +124,7 @@ func runEnvAdd(name string, f *envAddFlags) error {
 
 	fmt.Printf("\ndone. copied %d file(s) into environments/%s/.\n", copied, name)
 	fmt.Printf("    edit the %q block in environments/env-values.yml — set a real\n", name)
-	fmt.Println("    scaleway_project_id, base_domain, gateway_domain (placeholders were written).")
+	fmt.Println("    scaleway_project_id, base_domain, identity_domain (placeholders were written).")
 	fmt.Printf("    secrets come from the environment / .envrc before 'sabokit --env %s up'.\n", name)
 	return nil
 }
@@ -262,7 +262,7 @@ func addEnvValuesBlock(projectRoot, name, from string) error {
 	block := map[string]any{
 		"scaleway_project_id": "REPLACE-with-" + name + "-project-uuid",
 		"base_domain":         "CHANGEME-" + name + "-base-domain",
-		"gateway_domain":      "CHANGEME-" + name + "-gateway-domain",
+		"identity_domain":     "CHANGEME-" + name + "-gateway-domain",
 		"infra_email":         sliceStr(src, "infra_email", "ops@example.org"),
 		"scaleway_region":     sliceStr(src, "scaleway_region", "fr-par"),
 		"scaleway_zone":       sliceStr(src, "scaleway_zone", "fr-par-1"),

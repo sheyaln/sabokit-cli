@@ -27,8 +27,17 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           version="${GITHUB_REF_NAME#v}"
+          mm="${version%%-*}"; mm="${mm%.*}"   # blueprint line, eg 0.1 (drop -prerelease, then patch)
           out="sabokit-${GOOS}-${GOARCH}"
-          go build -trimpath -ldflags "-s -w -X github.com/sheyaln/sabokit-cli/internal/cli.Version=${version}" -o "${out}" ./cmd/sabokit
+          # CLI declares the blueprint range it supports; each environment
+          # picks its own version via the ?ref= its terraform pins. The CLI's
+          # newest supported line is its own major.minor (Min is a source
+          # constant, edited when widening backward compat).
+          go build -trimpath -ldflags \
+            "-s -w \
+             -X github.com/sheyaln/sabokit-cli/internal/version.CLI=${version} \
+             -X github.com/sheyaln/sabokit-cli/internal/version.SupportedBlueprintMax=${mm}" \
+            -o "${out}" ./cmd/sabokit
           sha256sum "${out}" > "${out}.sha256"
       - uses: actions/upload-artifact@v4
         with:
@@ -50,8 +59,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Tags with a prerelease suffix (v0.1.0-beta1) publish as GitHub prereleases.
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease" ;; esac
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
+            ${prerelease} \
             dist/*

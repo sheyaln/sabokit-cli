@@ -24,14 +24,14 @@ const sample = `
 prod:
   scaleway_project_id: "proj-prod"
   base_domain: "example.org"
-  gateway_domain: "auth.example.org"
+  identity_domain: "auth.example.org"
   infra_email: "ops@example.org"
   compute_instance_types:
     tools: "DEV1-L"
 staging:
   scaleway_project_id: "proj-staging"
   base_domain: "staging.example.org"
-  gateway_domain: "auth.staging.example.org"
+  identity_domain: "auth.staging.example.org"
   infra_email: "ops@example.org"
 `
 

@@ -22,7 +22,7 @@ docker compose down. cloud resources (instances, dns, secrets, TF state)
 are untouched. reversible via 'sabokit deploy --apps <same>'.
 
 passes the same env-aware -e flags as deploy (env_name,
-@/workspace/.ansible-vars.json, gateway_domain).
+@/workspace/.ansible-vars.json, identity_domain).
 
 runs against the sabokit-runner image (defaults to the version in
 'sabokit version'); down.yml lives at /opt/sabokit/platform/ansible/.`,
@@ -46,6 +46,9 @@ runs against the sabokit-runner image (defaults to the version in
 func runDown(apps, servers []string, dryRun, skipRefresh bool) error {
 	p, err := project.Load()
 	if err != nil {
+		return err
+	}
+	if err := requireCompatibleBlueprint(p); err != nil {
 		return err
 	}
 	if !dryRun && !skipRefresh {

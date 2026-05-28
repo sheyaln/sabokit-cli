@@ -106,6 +106,9 @@ func runUp(f *upFlags) error {
 	if err != nil {
 		return err
 	}
+	if err := requireCompatibleBlueprint(p); err != nil {
+		return err
+	}
 	envName := p.EnvName(globals.Env)
 	if envName == "" {
 		return fmt.Errorf("up requires an env (pass --env or set default_env in .sabokit/config.yml)")
@@ -229,9 +232,9 @@ func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Cli
 	}
 	projectID := slice.String("scaleway_project_id")
 	baseDomain := slice.String("base_domain")
-	gateway := slice.String("gateway_domain")
+	gateway := slice.String("identity_domain")
 	if !strings.HasSuffix(gateway, "."+baseDomain) && gateway != baseDomain {
-		fmt.Fprintf(os.Stderr, "    warning: gateway_domain %q does not sit under base_domain %q — terraform may refuse to manage the A record\n", gateway, baseDomain)
+		fmt.Fprintf(os.Stderr, "    warning: identity_domain %q does not sit under base_domain %q — terraform may refuse to manage the A record\n", gateway, baseDomain)
 	}
 
 	if os.Getenv("SCW_ACCESS_KEY") == "" || os.Getenv("SCW_SECRET_KEY") == "" {
@@ -462,15 +465,15 @@ func pruneKnownHosts(ips []string) error {
 	return os.WriteFile(path, bytes.TrimRight(b.Bytes(), "\n"), 0o600)
 }
 
-// readGatewayDomain reads gateway_domain from this env's slice in env-values.yml.
+// readGatewayDomain reads identity_domain from this env's slice in env-values.yml.
 func readGatewayDomain(projectRoot, envName string) (string, error) {
 	slice, err := envvalues.Get(projectRoot, envName)
 	if err != nil {
 		return "", err
 	}
-	gw := slice.String("gateway_domain")
+	gw := slice.String("identity_domain")
 	if gw == "" {
-		return "", fmt.Errorf("gateway_domain not set for env %q in %s", envName, envvalues.Path(projectRoot))
+		return "", fmt.Errorf("identity_domain not set for env %q in %s", envName, envvalues.Path(projectRoot))
 	}
 	return gw, nil
 }
@@ -490,7 +493,7 @@ func runAnsibleBootstrap(p *project.Project, envName, envDir, gateway string) er
 		"-i", containerWorkspace + "/" + p.Config.Inventory,
 		"-e", "env_name=" + envName,
 		"-e", "@" + containerWorkspace + "/.ansible-vars.json",
-		"-e", "gateway_domain=" + gateway,
+		"-e", "identity_domain=" + gateway,
 	}
 	if globals.Verbose {
 		inv.Cmd = append(inv.Cmd, "-v")
@@ -725,4 +728,3 @@ func reconcileOutpost(tfClient *tf.Client, envDir, gateway, adminToken string) e
 	}
 	return nil
 }
-

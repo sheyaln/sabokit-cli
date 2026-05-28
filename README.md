@@ -1,6 +1,6 @@
 # sabokit-cli
 
-cli for deploying and operating federated-commons stacks. shells out to the `sabokit-runner` image for terraform + ansible; you don't install either locally.
+cli for deploying and operating sabokit stacks. shells out to the `sabokit-runner` image for terraform + ansible; you don't install either locally.
 
 ## install
 
@@ -8,7 +8,17 @@ cli for deploying and operating federated-commons stacks. shells out to the `sab
 curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/master/install.sh | bash
 ```
 
-binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v2026.05.0` (calver: `vYYYY.MM.PATCH`).
+binary lands in `/usr/local/bin` if writable, else `$HOME/.local/bin`. override with `SABOKIT_INSTALL_DIR=...`. pin a version with `SABOKIT_VERSION=v0.1.0` (semver: `vX.Y.Z`).
+
+### from source
+
+for testing your own changes. builds the working tree as-is — a plain `go build`, uncommitted edits and all — and installs it. needs `go`; run it from a checkout:
+
+```bash
+./install-from-source.sh
+```
+
+same install-dir resolution as above (`SABOKIT_INSTALL_DIR` to override). `sabokit version` reports a `git describe` of the tree (eg. `0.1.0-dirty`) so you can tell a working-tree build from a release; override with `SABOKIT_CLI_VERSION=...`.
 
 ## quickstart
 
@@ -61,7 +71,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 | `sabokit version` | binary version + default runner image |
 
 global flags:
-- `--image <repo:tag>` (default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`) — runner image for ansible; env `SABOKIT_IMAGE`
+- `--image <repo:tag>` (default: `ghcr.io/sheyaln/sabokit-runner` at the env's pinned sabokit version) — runner image for ansible; env `SABOKIT_IMAGE`
 - `--scw-image <repo:tag>` (default `scaleway/cli:2.56`) — official scaleway cli image used for `secrets *`; env `SABOKIT_SCW_IMAGE`
 - `--platform <p>` — docker `--platform` override (eg. `linux/amd64` on arm64 hosts when an image is amd64-only); env `SABOKIT_PLATFORM`
 - `--env <name>` — environment name under `environments/<env>/`; overrides `.sabokit/config.yml`'s `default_env`; env `SABOKIT_ENV`
@@ -92,10 +102,10 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 
 ## status
 
-beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list|add|remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are calver `vYYYY.MM.PATCH`.
+beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list|add|remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are semver `vX.Y.Z`; the CLI supports a range of blueprint versions and each env pins its own via terraform `?ref=` (see `sabokit version`).
 
 execution models per command:
-- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). Default `ghcr.io/sheyaln/sabokit-runner:v3.3.1`; playbooks at `/opt/sabokit/platform/ansible/`. amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
+- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). `ghcr.io/sheyaln/sabokit-runner` tagged at the env's pinned sabokit version; playbooks at `/opt/sabokit/platform/ansible/`. amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
 - **docker (hashicorp/terraform image)**: `up` (TF apply/output/import), `destroy`. Default `hashicorp/terraform:1.9`; override with `--tf-image` / `SABOKIT_TF_IMAGE`.
 - **docker (scaleway/cli image)**: `secrets *`, `up` (reading the Authentik admin secret). Decoupled from the runner image.
 - **local**: `init` (git clone + copy of consumer-template into your project dir), `ssh` (`ssh user@host` passthrough), `logs` (ssh + remote docker), `apps add/remove` (config.tf editing).
