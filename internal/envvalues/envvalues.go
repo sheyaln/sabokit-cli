@@ -20,7 +20,7 @@ import (
 type Slice map[string]any
 
 // RequiredKeys have no default in env.tf — a deploy can't proceed without them.
-var RequiredKeys = []string{"scaleway_project_id", "base_domain", "gateway_domain", "infra_email"}
+var RequiredKeys = []string{"scaleway_project_id", "base_domain", "identity_domain", "infra_email"}
 
 // Path is environments/env-values.yml under the project root.
 func Path(projectRoot string) string {

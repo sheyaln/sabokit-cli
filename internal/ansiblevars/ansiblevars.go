@@ -14,7 +14,7 @@ import (
 var Keys = []string{
 	"enabled_apps",
 	"compute_hosts",
-	"authentik_gateway_domain",
+	"authentik_identity_domain",
 	"identity_bootstrap",
 	"traefik_acme_email",
 	"split_dns_overrides",

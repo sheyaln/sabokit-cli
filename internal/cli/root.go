@@ -3,32 +3,33 @@ package cli
 import (
 	"os"
 
+	"github.com/sheyaln/sabokit-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
 const (
 	DefaultRunnerImage = "ghcr.io/sheyaln/sabokit-runner"
-	DefaultRunnerTag   = "v0.1.0"
 	DefaultScwImage    = "scaleway/cli:2.56"
 	DefaultTFImage     = "hashicorp/terraform:1.9"
 )
 
 type GlobalFlags struct {
-	Image    string
-	ScwImage string
-	TFImage  string
-	Platform string
-	Env      string
-	Verbose  bool
+	Image            string
+	ScwImage         string
+	TFImage          string
+	Platform         string
+	Env              string
+	Verbose          bool
+	SkipVersionCheck bool
 }
 
 var globals GlobalFlags
 
 func NewRootCmd() *cobra.Command {
-	defaultImage := DefaultRunnerImage + ":" + DefaultRunnerTag
-	if env := os.Getenv("SABOKIT_IMAGE"); env != "" {
-		defaultImage = env
-	}
+	// Empty default => baseInvocation resolves the runner image tag from the
+	// environment's pinned sabokit version, so the ansible half matches the
+	// terraform half. SABOKIT_IMAGE / --image override.
+	defaultImage := os.Getenv("SABOKIT_IMAGE")
 	defaultPlatform := os.Getenv("SABOKIT_PLATFORM")
 	defaultEnv := os.Getenv("SABOKIT_ENV")
 	defaultScwImage := DefaultScwImage
@@ -42,7 +43,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "sabokit",
-		Version: Version,
+		Version: version.CLI,
 		Short:   "deploy and operate sabokit stacks",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			cmd.SilenceUsage = true
@@ -76,11 +77,12 @@ passed through to the runner image:
 		SilenceErrors: false,
 	}
 
-	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref for ansible/terraform (repository:tag); env: SABOKIT_IMAGE")
+	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref for ansible (repository:tag); default: sabokit-runner at the env's pinned version; env: SABOKIT_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.ScwImage, "scw-image", defaultScwImage, "scaleway cli image ref for secrets ops; env: SABOKIT_SCW_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.TFImage, "tf-image", defaultTFImage, "terraform image ref for up/destroy; env: SABOKIT_TF_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override (eg. linux/amd64); env: SABOKIT_PLATFORM")
 	cmd.PersistentFlags().StringVar(&globals.Env, "env", defaultEnv, "environment name under environments/<env>/; env: SABOKIT_ENV (overrides .sabokit/config.yml default_env)")
+	cmd.PersistentFlags().BoolVar(&globals.SkipVersionCheck, "skip-version-check", false, "skip the CLI⇄blueprint compatibility check (unsafe: mismatched terraform/ansible can corrupt state)")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")
 
 	cmd.AddCommand(

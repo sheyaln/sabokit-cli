@@ -19,27 +19,27 @@ func seedEnvDir(t *testing.T, projectRoot, env string) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"config.tf":              configTFSeed(),
-		"main.tf":                "# main\n",
-		"providers.tf":           "# providers\n",
-		"variables.tf":           "# vars\n",
-		"secrets.tf":             "# secrets data blocks\n",
-		"outputs.tf":             "# outputs\n",
-		"moved.tf":               "# moved blocks\n",
-		"README.md":              "# env " + env + "\n",
-		"config.tf.example":      "# example\n",
-		"backend.hcl.example":    `bucket = "x"` + "\n",
-		"terraform.tfvars":       "secret_admin_pw = \"hunter2\"\n",
-		"prod.tfvars":            "ignored\n",
-		"backend.hcl":            `bucket = "old-bucket"` + "\n",
-		"inventory.ini":          "[apps]\n",
-		".terraform.lock.hcl":    "# lock\n",
-		"terraform.tfstate":      "{}\n",
+		"config.tf":                configTFSeed(),
+		"main.tf":                  "# main\n",
+		"providers.tf":             "# providers\n",
+		"variables.tf":             "# vars\n",
+		"secrets.tf":               "# secrets data blocks\n",
+		"outputs.tf":               "# outputs\n",
+		"moved.tf":                 "# moved blocks\n",
+		"README.md":                "# env " + env + "\n",
+		"config.tf.example":        "# example\n",
+		"backend.hcl.example":      `bucket = "x"` + "\n",
+		"terraform.tfvars":         "secret_admin_pw = \"hunter2\"\n",
+		"prod.tfvars":              "ignored\n",
+		"backend.hcl":              `bucket = "old-bucket"` + "\n",
+		"inventory.ini":            "[apps]\n",
+		".terraform.lock.hcl":      "# lock\n",
+		"terraform.tfstate":        "{}\n",
 		"terraform.tfstate.backup": "{}\n",
-		".envrc":                 "export X=1\n",
-		".env":                   "X=1\n",
-		".ansible-vars.json":     "{}\n",
-		".tf-output.json":        "{}\n",
+		".envrc":                   "export X=1\n",
+		".env":                     "X=1\n",
+		".ansible-vars.json":       "{}\n",
+		".tf-output.json":          "{}\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -100,7 +100,7 @@ ssh:
 	envValues := `prod:
   scaleway_project_id: "proj-prod-uuid"
   base_domain: "example.org"
-  gateway_domain: "auth.example.org"
+  identity_domain: "auth.example.org"
   infra_email: "ops@example.org"
 `
 	if err := os.WriteFile(filepath.Join(envDir, "env-values.yml"), []byte(envValues), 0o644); err != nil {

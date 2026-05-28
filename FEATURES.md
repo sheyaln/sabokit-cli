@@ -10,7 +10,7 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 
 `docker` + `ssh` + `git` on the host. Nothing else. terraform/ansible/scw/jq/python come from images sabokit invokes (`hashicorp/terraform:1.9`, `ghcr.io/sheyaln/sabokit-runner`, `scaleway/cli:2.56`).
 
-## Status (as of v2026.05.0 baseline)
+## Status (as of the v0.1.0 semver reset)
 
 | Area | Shipped | Open |
 | --- | --- | --- |
@@ -71,11 +71,14 @@ Items 1–2 are foundation-tail and ship as a single patch (v2026.05.4) before p
 - Flattening the two-pass Authentik bootstrap. Deferred to the federated-commons v4.0 TF→Blueprints migration.
 - Replacing Scaleway-console-only steps (project creation, IAM key minting). Those stay manual, once per env.
 
-## Versioning policy (as of v2026.05.0)
+## Versioning policy
 
-`vYYYY.MM.PATCH` calver. Patch resets on month rollover.
+`vX.Y.Z` semver. **The CLI does not choose a blueprint version — each environment does**, via the `?ref=` its terraform pins (`environments/<env>/main.tf`'s `module "stack"` — directly when it's a `git::…?ref=`, or the unique inner `?ref=` of the vendored `modules/stack` for the canonical `../../modules/stack` layout). The CLI reads that pin, runs the matching `sabokit-runner` image, and verifies it can drive it.
 
-- First release in a month: `v2026.05.0`, `v2026.06.0`.
-- Patches within a month bump the last component: `v2026.05.0`, `v2026.05.1`, …
-- Pre-2026.05 releases on the `v0.1.x` line are frozen historical artifacts. Do not retag.
-- Major shape changes (breaking API, runner-image rev that breaks call sites) are flagged in CHANGELOG entries, not in the version number — calver doesn't encode breaking-vs-additive.
+- **The CLI declares a supported blueprint range**, not a single pin: `internal/version.SupportedBlueprintMin`–`SupportedBlueprintMax` (major.minor lines). `Min` is a source constant — bump it when dropping support for an old line. `Max` is injected at build = the CLI tag's own major.minor. The CLI is a thin orchestrator, so its coupling (TF target addresses, output shapes, playbook paths, the two-pass bootstrap) changes rarely; one binary can usually drive several blueprint minors.
+- **The runner image follows the env's pin.** `baseInvocation` resolves the `sabokit-runner` tag from the env's pinned version, so the ansible half always matches the terraform half. `--image` / `SABOKIT_IMAGE` override.
+- **Compatibility is gated at action time.** `up`/`deploy`/`down`/`destroy` refuse to run when the env's pinned version falls outside the supported range, with remediation (upgrade the CLI, or re-pin the env). Override: `--skip-version-check` (unsafe — mismatched TF/Ansible can corrupt state). `sabokit version` prints the CLI version, the supported range, and every env's pin with an `[ok]`/`[UNSUPPORTED]` mark.
+- **Stable vs beta is just the pinned ref.** Pin `?ref=v0.5.0-beta1` and you get the beta terraform *and* the beta runner image, reproducibly, per-env. No CLI channel flag.
+- **dev / source builds** report `0.1.0-dev` (or `git describe`) and leave the supported range at its source default.
+- **The `v2026.05.x` calver line is frozen history.** The CLI restarted at `v0.1.0` semver in tandem with the blueprint reset. Do not retag the calver releases.
+- **Breaking changes** bump major/minor per semver and are flagged in CHANGELOG entries.

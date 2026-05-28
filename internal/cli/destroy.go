@@ -80,6 +80,9 @@ func runDestroy(f *destroyFlags) error {
 	if p.EnvName(globals.Env) == "" {
 		return fmt.Errorf("destroy requires an env (pass --env or set default_env)")
 	}
+	if err := requireCompatibleBlueprint(p); err != nil {
+		return err
+	}
 	envDir, err := p.WorkspaceDir(globals.Env)
 	if err != nil {
 		return err

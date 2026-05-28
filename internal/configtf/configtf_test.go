@@ -63,7 +63,7 @@ func TestGetString(t *testing.T) {
   config = {
     scaleway_project_id = "abc-123"
     base_domain         = "example.org"
-    gateway_domain      = "auth.example.org"
+    identity_domain      = "auth.example.org"
     infra_email         = "ops@example.org"
     # commented_key     = "ignored"
   }
@@ -71,7 +71,7 @@ func TestGetString(t *testing.T) {
 	cases := []struct{ key, want string }{
 		{"scaleway_project_id", "abc-123"},
 		{"base_domain", "example.org"},
-		{"gateway_domain", "auth.example.org"},
+		{"identity_domain", "auth.example.org"},
 		{"infra_email", "ops@example.org"},
 		{"nonexistent", ""},
 	}

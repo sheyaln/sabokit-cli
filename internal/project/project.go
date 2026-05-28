@@ -84,6 +84,26 @@ func (p *Project) InventoryPath() string {
 	return filepath.Join(p.Root, p.Config.Inventory)
 }
 
+// Envs returns the environment names under environments/ — directories that
+// contain a main.tf, excluding _template.
+func (p *Project) Envs() []string {
+	entries, err := os.ReadDir(filepath.Join(p.Root, "environments"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(p.Root, "environments", e.Name(), "main.tf")); err != nil {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	return out
+}
+
 func (p *Project) AppsManifestPath() string {
 	return filepath.Join(p.Root, p.Config.AppsManifest)
 }

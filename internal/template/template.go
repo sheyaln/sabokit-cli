@@ -7,13 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 )
 
 type stderrBuf struct{ bytes.Buffer }
 
 const (
 	DefaultRepo = "https://github.com/sheyaln/sabokit"
-	DefaultTag  = "v0.1.0"
 	subdir      = "consumer-template"
 )
 
@@ -30,7 +32,7 @@ func Fetch(opts FetchOptions) (string, error) {
 		opts.Repo = DefaultRepo
 	}
 	if opts.Tag == "" {
-		opts.Tag = DefaultTag
+		opts.Tag = "master"
 	}
 	tmp, err := os.MkdirTemp("", "sabokit-init-*")
 	if err != nil {
@@ -55,6 +57,46 @@ func Fetch(opts FetchOptions) (string, error) {
 		return "", fmt.Errorf("no %s/ in %s @ %s", subdir, opts.Repo, opts.Tag)
 	}
 	return src, nil
+}
+
+// LatestRef returns the newest blueprint tag in the given major.minor line
+// (eg. "0.1") from repo's remote tags. Stable (vX.Y.Z) wins; if the line has
+// only prereleases (vX.Y.Z-betaN), the newest prerelease is returned. Returns
+// "" with no error when the line has no tags yet (fresh ecosystem).
+func LatestRef(repo, line string) (string, error) {
+	if repo == "" {
+		repo = DefaultRepo
+	}
+	c := exec.Command("git", "ls-remote", "--tags", "--refs", repo)
+	var out bytes.Buffer
+	var stderr stderrBuf
+	c.Stdout = &out
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		return "", fmt.Errorf("git ls-remote %s: %w\n%s", repo, err, stderr.String())
+	}
+	stableRe := regexp.MustCompile(`refs/tags/v` + regexp.QuoteMeta(line) + `\.(\d+)$`)
+	preRe := regexp.MustCompile(`refs/tags/v` + regexp.QuoteMeta(line) + `\.(\d+)-([0-9A-Za-z.]+)$`)
+	stable, stableP := "", -1
+	pre, preP, preS := "", -1, ""
+	for _, ln := range strings.Split(out.String(), "\n") {
+		if m := stableRe.FindStringSubmatch(ln); m != nil {
+			if p, _ := strconv.Atoi(m[1]); p > stableP {
+				stableP, stable = p, "v"+line+"."+m[1]
+			}
+			continue
+		}
+		if m := preRe.FindStringSubmatch(ln); m != nil {
+			p, _ := strconv.Atoi(m[1])
+			if p > preP || (p == preP && m[2] > preS) {
+				preP, preS, pre = p, m[2], "v"+line+"."+m[1]+"-"+m[2]
+			}
+		}
+	}
+	if stable != "" {
+		return stable, nil
+	}
+	return pre, nil
 }
 
 // CleanupParent removes the tmpdir parent of a path returned by Fetch.

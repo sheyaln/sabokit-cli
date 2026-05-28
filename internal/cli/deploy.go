@@ -40,7 +40,7 @@ playbook selection:
 env vars passed to ansible (auto, from the env dir):
   -e @/workspace/.ansible-vars.json (if present)
   -e env_name=<env>
-  -e gateway_domain=<extracted from .ansible-vars.json's authentik_gateway_domain>
+  -e identity_domain=<extracted from .ansible-vars.json's authentik_identity_domain>
 
 flag semantics:
   --apps         limits ansible --tags to the given app names
@@ -81,6 +81,9 @@ flag semantics:
 func runDeploy(f *deployFlags) error {
 	p, err := project.Load()
 	if err != nil {
+		return err
+	}
+	if err := requireCompatibleBlueprint(p); err != nil {
 		return err
 	}
 	if !f.dryRun && !f.skipRefresh {
@@ -143,7 +146,7 @@ func buildDeployInvocation(p *project.Project, f *deployFlags) (docker.Invocatio
 }
 
 // appendEnvExtraVars adds -e flags ansible playbooks expect when running
-// against a consumer-template env: env_name, gateway_domain, and the
+// against a consumer-template env: env_name, identity_domain, and the
 // .ansible-vars.json bundle. Skips silently if no env is set or the
 // vars file doesn't exist yet (eg. before up.sh has run).
 func appendEnvExtraVars(cmd []string, p *project.Project, envOverride string) []string {
@@ -161,7 +164,7 @@ func appendEnvExtraVars(cmd []string, p *project.Project, envOverride string) []
 	}
 	cmd = append(cmd, "-e", "@"+containerWorkspace+"/.ansible-vars.json")
 	if gateway, ok := readAnsibleVarGatewayDomain(varsPath); ok {
-		cmd = append(cmd, "-e", "gateway_domain="+gateway)
+		cmd = append(cmd, "-e", "identity_domain="+gateway)
 	}
 	return cmd
 }
@@ -172,7 +175,7 @@ func readAnsibleVarGatewayDomain(path string) (string, bool) {
 		return "", false
 	}
 	var v struct {
-		AuthentikGatewayDomain string `json:"authentik_gateway_domain"`
+		AuthentikGatewayDomain string `json:"authentik_identity_domain"`
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return "", false
