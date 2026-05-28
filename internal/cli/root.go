@@ -43,12 +43,12 @@ func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "sabokit",
 		Version: Version,
-		Short:   "deploy and operate federated-commons stacks",
+		Short:   "deploy and operate sabokit stacks",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			cmd.SilenceUsage = true
 		},
 		Long: `sabokit orchestrates the sabokit-runner image to provision and manage
-federated-commons stacks on scaleway. it is a thin orchestrator: terraform
+sabokit stacks on scaleway. it is a thin orchestrator: terraform
 and ansible run inside the runner image, sabokit shells out to docker.
 
 requirements:
