@@ -7,6 +7,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
+	"strings"
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 )
@@ -23,22 +26,27 @@ var envPassthru = []string{
 }
 
 type Client struct {
-	image    string
-	platform string
+	image       string
+	platform    string
+	projectRoot string
 }
 
-func New(image, platform string) *Client {
-	return &Client{image: image, platform: platform}
+// New builds a terraform client. projectRoot (the consumer repo root) is
+// bind-mounted at /workspace so the container sees the same directory layout a
+// host `terraform` run sees — relative module sources (../../modules/stack)
+// and the keyed ../env-values.yml resolve identically. Pass project.Load().Root.
+func New(image, platform, projectRoot string) *Client {
+	return &Client{image: image, platform: platform, projectRoot: projectRoot}
 }
 
 // Workspace is the in-container path the env dir is mounted at.
 const Workspace = "/workspace"
 
-func (c *Client) invocation(args ...string) docker.Invocation {
+func (c *Client) invocation(workdir string, args ...string) docker.Invocation {
 	return docker.Invocation{
 		Image:       c.image,
 		Platform:    c.platform,
-		Workdir:     Workspace,
+		Workdir:     workdir,
 		Entrypoint:  "terraform",
 		Cmd:         args,
 		EnvPassthru: envPassthru,
@@ -46,9 +54,22 @@ func (c *Client) invocation(args ...string) docker.Invocation {
 	}
 }
 
+// withEnvDir mounts the whole project root at /workspace and sets the workdir
+// to the env subdir, so the container sees the exact layout a host terraform
+// run sees: relative module sources (../../modules/stack) and the keyed
+// ../env-values.yml resolve identically, and the CLI runs the same terraform a
+// hand-run would. envDir is <root>/environments/<env>, or the root itself in
+// flat-layout mode (workdir collapses to /workspace).
 func (c *Client) withEnvDir(envDir string, args ...string) docker.Invocation {
-	inv := c.invocation(args...)
-	inv.Mounts = []docker.Mount{{Source: envDir, Target: Workspace}}
+	rel, err := filepath.Rel(c.projectRoot, envDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		// envDir not under projectRoot (shouldn't happen) — mount it alone.
+		inv := c.invocation(Workspace, args...)
+		inv.Mounts = []docker.Mount{{Source: envDir, Target: Workspace}}
+		return inv
+	}
+	inv := c.invocation(path.Join(Workspace, filepath.ToSlash(rel)), args...)
+	inv.Mounts = []docker.Mount{{Source: c.projectRoot, Target: Workspace}}
 	return inv
 }
 
@@ -116,9 +137,9 @@ func (c *Client) Output(envDir string) ([]byte, error) {
 	return c.capture(envDir, []string{"output", "-json"})
 }
 
-// PlanFile is the in-container path the saved plan lives at. Tied to
-// /workspace so callers can ApplyPlan against the same mount.
-const PlanFile = Workspace + "/.tfplan"
+// PlanFile is the saved plan path, relative to the workdir (the env dir), so
+// plan -out and apply land in the same place regardless of mount layout.
+const PlanFile = ".tfplan"
 
 // Plan runs `terraform plan -out=<PlanFile>` with the same option shape
 // as Apply. The user sees streamed plan output; the binary plan is

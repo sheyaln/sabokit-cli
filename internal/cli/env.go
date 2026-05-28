@@ -9,9 +9,11 @@ import (
 	"strings"
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
+	"github.com/sheyaln/sabokit-cli/internal/envvalues"
 	"github.com/sheyaln/sabokit-cli/internal/project"
 	"github.com/sheyaln/sabokit-cli/internal/scw"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func newEnvCmd() *cobra.Command {
@@ -33,15 +35,15 @@ func newEnvAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <name> --from <existing-env>",
 		Short: "scaffold a new env by carbon-copying an existing one",
-		Long: `add <name> creates environments/<name>/ by carbon-copying committable
-files from environments/<existing-env>/ (config.tf, README.md, *.tf, *.example,
-etc.) and skipping per-env state, secrets, locks, and runtime artifacts
-(*.tfvars, backend.hcl, inventory.ini, .terraform/, *.tfstate*).
+		Long: `add <name> creates environments/<name>/ by carbon-copying the env root
+from environments/<existing-env>/ (config.tf, env.tf, *.tf — all byte-identical
+across envs) and skipping per-env state, locks, and runtime artifacts
+(backend.hcl, inventory.ini, .terraform/, *.tfstate*, *.tfvars).
 
-backend.hcl is regenerated to point at "<org-slug>-tfstate-<name>". The
-environment string inside config.tf is substituted to <name>. Other
-env-specific values inside config.tf (project_id, domains, compute_hosts
-shape) are left untouched — review and edit by hand.
+backend.hcl is regenerated to point at "<org-slug>-tfstate-<name>", and a
+"<name>:" block is appended to environments/env-values.yml with placeholder
+project_id/domains for you to fill in (each env needs a distinct project). No
+env-specific value lives in the env dir, so the copy carries nothing to rewrite.
 
 a fresh Scaleway state bucket is created for the new env (--skip-bucket
 to opt out).`,
@@ -100,8 +102,8 @@ func runEnvAdd(name string, f *envAddFlags) error {
 	}
 	done()
 
-	done = step(fmt.Sprintf("substituting environment = %q → %q in config.tf", f.from, name))
-	if err := rewriteEnvironmentString(filepath.Join(dstDir, "config.tf"), f.from, name); err != nil {
+	done = step(fmt.Sprintf("appending %q block to environments/env-values.yml", name))
+	if err := addEnvValuesBlock(proj.Root, name, f.from); err != nil {
 		return err
 	}
 	done()
@@ -121,9 +123,9 @@ func runEnvAdd(name string, f *envAddFlags) error {
 	}
 
 	fmt.Printf("\ndone. copied %d file(s) into environments/%s/.\n", copied, name)
-	fmt.Println("    review config.tf for other env-specific values you may need to update:")
-	fmt.Println("    project_id, base_domain, gateway_domain, mgmt_domain, compute_hosts shape.")
-	fmt.Printf("    secrets are per-env — populate environments/%s/*.tfvars before 'sabokit --env %s up'.\n", name, name)
+	fmt.Printf("    edit the %q block in environments/env-values.yml — set a real\n", name)
+	fmt.Println("    scaleway_project_id, base_domain, gateway_domain (placeholders were written).")
+	fmt.Printf("    secrets come from the environment / .envrc before 'sabokit --env %s up'.\n", name)
 	return nil
 }
 
@@ -238,26 +240,53 @@ func copyEnvFile(src, dst string, mode os.FileMode) error {
 	return err
 }
 
-// rewriteEnvironmentString swaps the HCL assignment
-// `environment = "<from>"` to `environment = "<to>"` in config.tf. Only
-// matches the precise assignment shape — bare textual occurrences of
-// <from> in domains, slugs, or comments are left untouched.
-func rewriteEnvironmentString(configPath, from, to string) error {
-	raw, err := os.ReadFile(configPath)
+// addEnvValuesBlock appends a "<name>:" block to environments/env-values.yml,
+// seeded from the source env's slice but with placeholder project_id/domains —
+// each env needs a distinct project, and the operator fills the real values.
+// Appends text (rather than re-marshalling the whole file) so existing
+// comments + env blocks survive untouched.
+func addEnvValuesBlock(projectRoot, name, from string) error {
+	path := envvalues.Path(projectRoot)
+	existing, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// no config.tf to rewrite (carbon-copy from a partially-scaffolded
-			// env). Skip silently — operator will materialise one themselves.
-			return nil
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	all, err := envvalues.Load(projectRoot)
+	if err != nil {
+		return err
+	}
+	if _, exists := all[name]; exists {
+		return fmt.Errorf("env %q already has a block in %s", name, path)
+	}
+	src := all[from]
+	block := map[string]any{
+		"scaleway_project_id": "REPLACE-with-" + name + "-project-uuid",
+		"base_domain":         "CHANGEME-" + name + "-base-domain",
+		"gateway_domain":      "CHANGEME-" + name + "-gateway-domain",
+		"infra_email":         sliceStr(src, "infra_email", "ops@example.org"),
+		"scaleway_region":     sliceStr(src, "scaleway_region", "fr-par"),
+		"scaleway_zone":       sliceStr(src, "scaleway_zone", "fr-par-1"),
+	}
+	body, err := yaml.Marshal(map[string]map[string]any{name: block})
+	if err != nil {
+		return err
+	}
+	out := existing
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, '\n')
+	out = append(out, body...)
+	return os.WriteFile(path, out, 0o644)
+}
+
+func sliceStr(s envvalues.Slice, key, def string) string {
+	if s != nil {
+		if v := s.String(key); v != "" {
+			return v
 		}
-		return fmt.Errorf("read config.tf: %w", err)
 	}
-	re := regexp.MustCompile(`(?m)^(\s*environment\s*=\s*)"` + regexp.QuoteMeta(from) + `"(.*)$`)
-	updated := re.ReplaceAllString(string(raw), `${1}"`+to+`"${2}`)
-	if updated == string(raw) {
-		return fmt.Errorf("config.tf has no `environment = %q` assignment to rewrite (expected upstream env name)", from)
-	}
-	return os.WriteFile(configPath, []byte(updated), 0o644)
+	return def
 }
 
 // writeBackendHCL regenerates backend.hcl for the new env, matching the

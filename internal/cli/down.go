@@ -52,7 +52,7 @@ func runDown(apps, servers []string, dryRun, skipRefresh bool) error {
 		if err := docker.Preflight(); err != nil {
 			return err
 		}
-		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform)); err != nil {
+		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform, p.Root)); err != nil {
 			return err
 		}
 	}

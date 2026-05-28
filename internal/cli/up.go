@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheyaln/sabokit-cli/internal/configtf"
 	"github.com/sheyaln/sabokit-cli/internal/docker"
+	"github.com/sheyaln/sabokit-cli/internal/envvalues"
 	"github.com/sheyaln/sabokit-cli/internal/inventory"
 	"github.com/sheyaln/sabokit-cli/internal/project"
 	"github.com/sheyaln/sabokit-cli/internal/scw"
@@ -115,7 +115,7 @@ func runUp(f *upFlags) error {
 		return err
 	}
 
-	tfClient := tf.New(globals.TFImage, globals.Platform)
+	tfClient := tf.New(globals.TFImage, globals.Platform, p.Root)
 	scwClient := scw.New(globals.ScwImage, globals.Platform)
 
 	if !f.skipPreflight {
@@ -135,7 +135,7 @@ func runUp(f *upFlags) error {
 	}
 
 	if !f.skipConfigure {
-		if err := runConfigurePhases(envName, envDir, tfClient, scwClient, f); err != nil {
+		if err := runConfigurePhases(p, envName, envDir, tfClient, scwClient, f); err != nil {
 			return err
 		}
 	} else {
@@ -196,10 +196,10 @@ func confirmPlan(envName string, in io.Reader) (bool, error) {
 }
 
 // runPreflight verifies the env is in a state where `up` can succeed:
-// required files present, config.tf has the keys it needs, SCW creds
-// work, and the user's SSH public key is in the project's IAM keystore.
-// Mirrors the original preflight.sh sans the dep-install checks (those
-// don't apply in pure-Go mode — tools come from docker images).
+// required files present, env-values.yml has this env's required keys (and no
+// two envs share a project_id), SCW creds work, and the user's SSH public key
+// is in the project's IAM keystore. Tools come from docker images, so there
+// are no host dep-install checks.
 func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Client) error {
 	phase("preflight")
 
@@ -210,20 +210,26 @@ func runPreflight(p *project.Project, envName, envDir string, scwClient *scw.Cli
 		}
 	}
 
-	rawConfig, err := os.ReadFile(filepath.Join(envDir, "config.tf"))
+	// Per-env values live in the committed, keyed environments/env-values.yml,
+	// which Terraform resolves itself via env.tf (yamldecode + dir name). The
+	// CLI reads the same file here — it's not a CLI-only input.
+	allEnvs, err := envvalues.Load(p.Root)
 	if err != nil {
-		return err
+		return fmt.Errorf("preflight: %w", err)
 	}
-	content := string(rawConfig)
-	requiredKeys := []string{"scaleway_project_id", "base_domain", "gateway_domain", "infra_email"}
-	for _, k := range requiredKeys {
-		if v := configtf.GetString(content, k); v == "" {
-			return fmt.Errorf("preflight: %s not set in config.tf — edit and re-run", k)
-		}
+	if err := envvalues.CheckDistinctProjectIDs(allEnvs); err != nil {
+		return fmt.Errorf("preflight: %w", err)
 	}
-	projectID := configtf.GetString(content, "scaleway_project_id")
-	baseDomain := configtf.GetString(content, "base_domain")
-	gateway := configtf.GetString(content, "gateway_domain")
+	slice, err := envvalues.Get(p.Root, envName)
+	if err != nil {
+		return fmt.Errorf("preflight: %w", err)
+	}
+	if err := slice.Require(envvalues.RequiredKeys...); err != nil {
+		return fmt.Errorf("preflight: env-values.yml [%s]: %w", envName, err)
+	}
+	projectID := slice.String("scaleway_project_id")
+	baseDomain := slice.String("base_domain")
+	gateway := slice.String("gateway_domain")
 	if !strings.HasSuffix(gateway, "."+baseDomain) && gateway != baseDomain {
 		fmt.Fprintf(os.Stderr, "    warning: gateway_domain %q does not sit under base_domain %q — terraform may refuse to manage the A record\n", gateway, baseDomain)
 	}
@@ -323,7 +329,7 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 		}
 	}
 
-	gateway, err := readGatewayDomain(envDir)
+	gateway, err := readGatewayDomain(p.Root, envName)
 	if err != nil {
 		return err
 	}
@@ -352,7 +358,7 @@ func runUpPhases(p *project.Project, envName, envDir string, tfClient *tf.Client
 
 // runConfigurePhases runs phases 10-13: read admin token, optional outpost
 // import, full terraform apply, refresh outputs.
-func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *scw.Client, f *upFlags) error {
+func runConfigurePhases(p *project.Project, envName, envDir string, tfClient *tf.Client, scwClient *scw.Client, f *upFlags) error {
 	tfOutPath := filepath.Join(envDir, ".tf-output.json")
 	tfOut, err := os.ReadFile(tfOutPath)
 	if err != nil {
@@ -365,7 +371,7 @@ func runConfigurePhases(envName, envDir string, tfClient *tf.Client, scwClient *
 		return err
 	}
 
-	gateway, err := readGatewayDomain(envDir)
+	gateway, err := readGatewayDomain(p.Root, envName)
 	if err != nil {
 		return err
 	}
@@ -456,17 +462,17 @@ func pruneKnownHosts(ips []string) error {
 	return os.WriteFile(path, bytes.TrimRight(b.Bytes(), "\n"), 0o600)
 }
 
-// readGatewayDomain extracts gateway_domain from the env's config.tf.
-func readGatewayDomain(envDir string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(envDir, "config.tf"))
+// readGatewayDomain reads gateway_domain from this env's slice in env-values.yml.
+func readGatewayDomain(projectRoot, envName string) (string, error) {
+	slice, err := envvalues.Get(projectRoot, envName)
 	if err != nil {
-		return "", fmt.Errorf("read config.tf: %w", err)
+		return "", err
 	}
-	val := configtf.GetString(string(raw), "gateway_domain")
-	if val == "" {
-		return "", fmt.Errorf("gateway_domain not set in %s/config.tf", envDir)
+	gw := slice.String("gateway_domain")
+	if gw == "" {
+		return "", fmt.Errorf("gateway_domain not set for env %q in %s", envName, envvalues.Path(projectRoot))
 	}
-	return val, nil
+	return gw, nil
 }
 
 // runAnsibleBootstrap runs ansible-playbook bootstrap.yml against the

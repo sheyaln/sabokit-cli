@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sheyaln/sabokit-cli/internal/envvalues"
 )
 
 // seedEnvDir writes a fully-populated environments/<env>/ that mirrors
@@ -17,7 +19,7 @@ func seedEnvDir(t *testing.T, projectRoot, env string) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"config.tf":              configTFSeed(env),
+		"config.tf":              configTFSeed(),
 		"main.tf":                "# main\n",
 		"providers.tf":           "# providers\n",
 		"variables.tf":           "# vars\n",
@@ -53,18 +55,18 @@ func seedEnvDir(t *testing.T, projectRoot, env string) {
 	}
 }
 
-func configTFSeed(env string) string {
+func configTFSeed() string {
 	return `locals {
   config = {
-    scaleway_project_id = "00000000-0000-0000-0000-000000000000"
-    scaleway_region     = "fr-par"
-    scaleway_zone       = "fr-par-1"
-    org_slug    = "demo"
-    org_name    = "Demo"
-    environment = "` + env + `"
-    base_domain    = "example.org"
-    gateway_domain = "auth.example.org"
-    infra_email    = "ops@example.org"
+    org_slug = "demo"
+    org_name = "Demo"
+
+    apps = {
+      outline = {
+        enabled  = true
+        hostname = "wiki.${local.env.base_domain}"
+      }
+    }
   }
 }
 `
@@ -89,6 +91,19 @@ ssh:
   key: ~/.ssh/id_ed25519
 `
 	if err := os.WriteFile(filepath.Join(root, ".sabokit", "config.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envDir := filepath.Join(root, "environments")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envValues := `prod:
+  scaleway_project_id: "proj-prod-uuid"
+  base_domain: "example.org"
+  gateway_domain: "auth.example.org"
+  infra_email: "ops@example.org"
+`
+	if err := os.WriteFile(filepath.Join(envDir, "env-values.yml"), []byte(envValues), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -174,7 +189,7 @@ func TestEnvAddRegeneratesBackendHCL(t *testing.T) {
 	}
 }
 
-func TestEnvAddSubstitutesEnvironmentString(t *testing.T) {
+func TestEnvAddAppendsEnvValuesBlock(t *testing.T) {
 	root := seedProjectRoot(t)
 	seedEnvDir(t, root, "prod")
 	withCwd(t, root)
@@ -182,54 +197,28 @@ func TestEnvAddSubstitutesEnvironmentString(t *testing.T) {
 	if err := runEnvAdd("staging", &envAddFlags{from: "prod", skipBucket: true}); err != nil {
 		t.Fatalf("env add: %v", err)
 	}
-	body, err := os.ReadFile(filepath.Join(root, "environments", "staging", "config.tf"))
+	body, err := os.ReadFile(filepath.Join(root, "environments", "env-values.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(body)
-	if !strings.Contains(got, `environment = "staging"`) {
-		t.Errorf("config.tf should have environment = \"staging\":\n%s", got)
+	// prod block preserved, staging block appended with a placeholder project_id.
+	if !strings.Contains(got, "prod:") || !strings.Contains(got, "staging:") {
+		t.Errorf("env-values.yml should keep prod and add staging:\n%s", got)
 	}
-	if strings.Contains(got, `environment = "prod"`) {
-		t.Errorf("config.tf still has source env string:\n%s", got)
+	if !strings.Contains(got, "proj-prod-uuid") {
+		t.Errorf("prod's project_id should survive the append:\n%s", got)
 	}
-}
-
-func TestEnvAddDoesNotTouchUnrelatedOccurrencesOfSourceEnvName(t *testing.T) {
-	root := seedProjectRoot(t)
-	dir := filepath.Join(root, "environments", "prod")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if !strings.Contains(got, "REPLACE-with-staging-project-uuid") {
+		t.Errorf("staging should get a placeholder project_id:\n%s", got)
+	}
+	// the appended block must not reuse prod's project_id (the pollution guard).
+	all, err := envvalues.Load(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// config.tf where the source env name "prod" also appears in unrelated
-	// places (a domain, a comment). Only the precise HCL assignment should
-	// be rewritten.
-	body := `locals {
-  config = {
-    org_slug    = "demo"
-    environment = "prod"
-    base_domain = "prod.example.org"  # production domain
-  }
-}
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.tf"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	withCwd(t, root)
-
-	if err := runEnvAdd("staging", &envAddFlags{from: "prod", skipBucket: true}); err != nil {
-		t.Fatalf("env add: %v", err)
-	}
-	out, _ := os.ReadFile(filepath.Join(root, "environments", "staging", "config.tf"))
-	got := string(out)
-	if !strings.Contains(got, `environment = "staging"`) {
-		t.Errorf("environment line not rewritten:\n%s", got)
-	}
-	if !strings.Contains(got, `prod.example.org`) {
-		t.Errorf("unrelated occurrence of 'prod' in domain should be untouched:\n%s", got)
-	}
-	if !strings.Contains(got, `# production domain`) {
-		t.Errorf("unrelated comment should be untouched:\n%s", got)
+	if err := envvalues.CheckDistinctProjectIDs(all); err != nil {
+		t.Errorf("appended env should keep project_ids distinct: %v", err)
 	}
 }
 

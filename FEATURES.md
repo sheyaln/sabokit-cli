@@ -15,8 +15,9 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 | Area | Shipped | Open |
 | --- | --- | --- |
 | `sabokit init` interactive scaffolding | prompts; project + env(s); per-env `config.tf` + `backend.hcl`; `.gitignore` + `.envrc.example` + `README.md` scaffolds; staging-default-YES; `==> ok` progress cadence | — |
-| State bucket creation | per-env idempotent create via `scaleway/cli`; versioning enabled; `acl=private`; name-length (≤63) precheck | block-public-access (scw doesn't expose a flag; `acl=private` is canonical) |
+| State bucket creation | per-env idempotent create via `scaleway/cli`; versioning enabled; `acl=private`; name-length (≤63) precheck | block-public-access (scw doesn't expose a flag; `acl=private` is canonical); bucket-exists-but-different-ownership guard (currently skips silently on name collision) |
 | Preflight (phase 0 of `up`) | config keys + SCW creds + IAM ssh-key upload + DNS-zone-delegation check; gateway DNS propagation wait runs between bootstrap apply and LE-cert wait | — |
+| Init-time validation echo | env-var presence check for `SCW_ACCESS_KEY`/`SCW_SECRET_KEY`; bucket-name length precheck | SCW project probe (`account project get`) before bucket create; SSH-key IAM registration at init (currently deferred to `up`); DNS zone delegation check at init (currently deferred to `up`) |
 | `sabokit up` end-to-end | preflight + plan+confirm+apply (bootstrap) + refresh + ansible bootstrap + DNS-propagation wait + LE-cert wait + Authentik index wait + plan+confirm+apply (configure) + outpost import. Plan-confirm gate defaults yes for non-prod, no for prod; `--no-confirm` bypasses both gates | — |
 | Inventory + `.ansible-vars.json` regen | refreshed before every up/deploy/down/status | — |
 | Two-pass Authentik | hidden behind `sabokit up` | — |
@@ -50,6 +51,18 @@ Two rules the upstream operator has surfaced (both **honored as of v2026.05.2**)
 
 - **`.tfvars` is for secrets only.** Operator-facing config (apps, hostnames, image tags, host-services knobs) lives in `config.tf` as `locals.config` + `module "stack"`. The init setup wizard MAY write a `.tfvars` for plaintext-secret-at-apply-time. The `env add --from <env>` carbon-copy flow MUST NOT copy `.tfvars` across envs — each env's secrets are its own. `.gitignore` excludes `*.tfvars` and keeps `*.tfvars.example` tracked.
 - **`inventory.ini.example` is misleading.** The real `inventory.ini` is generated from `terraform output -json compute_hosts` on every `sabokit up`/`deploy`. `scaffoldEnv` strips the placeholder alongside the legacy bash orchestration scripts (`preflight.sh`, `up.sh`, `configure.sh`, `_lib.sh`) — sabokit-cli replaced them.
+- **`terraform.tfvars` is not generated at init.** `init` writes none; consumers don't need one for a normal deploy. The wizard reserves the right to write a `.tfvars` for a future plaintext-secret-at-apply-time variable, but no such variable exists in upstream today. Current secret path is scaleway secret manager via `data "scaleway_secret_version"` blocks in `secrets.tf`.
+
+## Hardening backlog (non-blocking for first E2E)
+
+These are gaps surfaced by the v2026.05.3 audit. None block a fresh consumer from doing `sabokit init` → `sabokit up` end-to-end today, because `up`'s preflight covers the same checks before any terraform apply runs. Listed by fail-loud-earliness payoff:
+
+1. **Init-time SCW project probe** — call `scw account project get project-id=<id>` once before the bucket-create loop. Catches wrong/stale API keys with a clean error instead of an opaque `scw object bucket create` failure. ~10 lines.
+2. **Bucket-exists-but-different-ownership guard** — when `BucketExists` says yes, re-fetch and verify it's in the current `SCW_DEFAULT_PROJECT_ID`. Detects S3-namespace collisions (rare but irreversibly confusing when they happen). ~15 lines.
+3. **Init-time SSH-key IAM registration** — promote `EnsureSSHKey` from `up` preflight to also run during `init`. Means the operator finds out about a missing public key when scaffolding, not on first `up`.
+4. **Init-time DNS-zone-delegation check** — promote `ensureDNSZoneDelegated` from `up` preflight to also run during `init`. Same shape as #3 — earlier, louder failure.
+
+Items 1–2 are foundation-tail and ship as a single patch (v2026.05.4) before pack 3. Items 3–4 are creature comfort: they prevent a 30-second `init` from feeling successful when the first `up` is going to fail anyway, but cost the operator nothing today since `up` catches them. Bundle into pack 3 (`env add` interactive) or defer.
 
 ## Out of scope (won't build)
 

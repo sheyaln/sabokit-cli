@@ -71,7 +71,7 @@ func runStatus(apps, servers []string, dryRun, skipRefresh bool) error {
 	}
 
 	if !skipRefresh {
-		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform)); err != nil {
+		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform, p.Root)); err != nil {
 			return err
 		}
 	}
