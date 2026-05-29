@@ -65,7 +65,7 @@ prerequisites:
                 #   inventory regen, ssh wait, ansible bootstrap
                 #   LE cert wait, blueprint indexing wait
                 #   full tf apply (identity + apps)
-                # uses hashicorp/terraform:1.9, sabokit-runner, scaleway/cli
+                # uses hashicorp/terraform:1.13, sabokit-runner, scaleway/cli
                 # only host requirements: docker + ssh + git
                 # --skip-preflight / --skip-up / --skip-configure for re-runs
 

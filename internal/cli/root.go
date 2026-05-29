@@ -10,7 +10,7 @@ import (
 const (
 	DefaultRunnerImage = "ghcr.io/sheyaln/sabokit-runner"
 	DefaultScwImage    = "scaleway/cli:2.56"
-	DefaultTFImage     = "hashicorp/terraform:1.9"
+	DefaultTFImage     = "hashicorp/terraform:1.13"
 )
 
 type GlobalFlags struct {

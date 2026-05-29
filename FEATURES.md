@@ -8,7 +8,7 @@ sabokit-cli is the conductor for the deploy lifecycle and the consumer-template 
 
 ## Host requirements
 
-`docker` + `ssh` + `git` on the host. Nothing else. terraform/ansible/scw/jq/python come from images sabokit invokes (`hashicorp/terraform:1.9`, `ghcr.io/sheyaln/sabokit-runner`, `scaleway/cli:2.56`).
+`docker` + `ssh` + `git` on the host. Nothing else. terraform/ansible/scw/jq/python come from images sabokit invokes (`hashicorp/terraform:1.13`, `ghcr.io/sheyaln/sabokit-runner`, `scaleway/cli:2.56`).
 
 ## Status (as of the v0.1.0 semver reset)
 
