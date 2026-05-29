@@ -41,6 +41,7 @@ func baseInvocation(p *project.Project) (docker.Invocation, error) {
 	return docker.Invocation{
 		Image:       image,
 		Platform:    globals.Platform,
+		Pull:        globals.Pull,
 		Mounts:      mounts,
 		Env:         env,
 		EnvPassthru: []string{"SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_PROJECT_ID", "SCW_DEFAULT_ORGANIZATION_ID", "SCW_DEFAULT_REGION", "SCW_DEFAULT_ZONE"},

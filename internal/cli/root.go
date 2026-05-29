@@ -19,6 +19,7 @@ type GlobalFlags struct {
 	ScwImage         string
 	TFImage          string
 	Platform         string
+	Pull             string
 	Env              string
 	Verbose          bool
 	SkipVersionCheck bool
@@ -38,6 +39,14 @@ func NewRootCmd() *cobra.Command {
 		// when DOCKER_DEFAULT_PLATFORM is set). terraform, scaleway/cli, and
 		// sabokit-runner all ship linux/amd64 + linux/arm64.
 		defaultPlatform = "linux/" + runtime.GOARCH
+	}
+	// Runner image rides the moving v0.1.0 tag pre-launch; docker caches a tag
+	// by name and won't re-fetch a moved one, so default to always-pull. A
+	// registry digest check is cheap; layers re-download only when it actually
+	// moved. Override with --pull missing|never (offline / pre-pulled CI).
+	defaultPull := os.Getenv("SABOKIT_PULL")
+	if defaultPull == "" {
+		defaultPull = "always"
 	}
 	defaultEnv := os.Getenv("SABOKIT_ENV")
 	defaultScwImage := DefaultScwImage
@@ -72,6 +81,7 @@ env vars:
   SABOKIT_SCW_IMAGE                   overrides --scw-image default (scaleway cli for secrets ops)
   SABOKIT_TF_IMAGE                    overrides --tf-image default (terraform for up/destroy)
   SABOKIT_PLATFORM                    docker --platform override (defaults to host arch; all images are multi-arch)
+  SABOKIT_PULL                        runner image --pull policy (default always; the runner rides a moving tag)
   SABOKIT_ENV                         overrides .sabokit/config.yml default_env
 
 passed through to the runner image:
@@ -89,6 +99,7 @@ passed through to the runner image:
 	cmd.PersistentFlags().StringVar(&globals.ScwImage, "scw-image", defaultScwImage, "scaleway cli image ref for secrets ops; env: SABOKIT_SCW_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.TFImage, "tf-image", defaultTFImage, "terraform image ref for up/destroy; env: SABOKIT_TF_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override; defaults to host arch (eg. force emulation with linux/amd64); env: SABOKIT_PLATFORM")
+	cmd.PersistentFlags().StringVar(&globals.Pull, "pull", defaultPull, "runner image docker --pull policy (always|missing|never); env: SABOKIT_PULL")
 	cmd.PersistentFlags().StringVar(&globals.Env, "env", defaultEnv, "environment name under environments/<env>/; env: SABOKIT_ENV (overrides .sabokit/config.yml default_env)")
 	cmd.PersistentFlags().BoolVar(&globals.SkipVersionCheck, "skip-version-check", false, "skip the CLI⇄blueprint compatibility check (unsafe: mismatched terraform/ansible can corrupt state)")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")

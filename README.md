@@ -73,6 +73,7 @@ global flags:
 - `--image <repo:tag>` (default: `ghcr.io/sheyaln/sabokit-runner` at the env's pinned sabokit version) — runner image for ansible; env `SABOKIT_IMAGE`
 - `--scw-image <repo:tag>` (default `scaleway/cli:2.56`) — official scaleway cli image used for `secrets *`; env `SABOKIT_SCW_IMAGE`
 - `--platform <p>` — docker `--platform` override; defaults to the host's native arch (all images are multi-arch). Set eg. `linux/amd64` to force emulation; env `SABOKIT_PLATFORM`
+- `--pull <policy>` — runner image docker `--pull` policy (`always`/`missing`/`never`); default `always` so a moved tag is refreshed (the runner rides the moving pre-launch tag). Set `missing`/`never` for offline or pre-pulled CI; env `SABOKIT_PULL`
 - `--env <name>` — environment name under `environments/<env>/`; overrides `.sabokit/config.yml`'s `default_env`; env `SABOKIT_ENV`
 - `-v/--verbose`
 

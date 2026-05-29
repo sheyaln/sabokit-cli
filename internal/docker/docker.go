@@ -16,6 +16,7 @@ type Mount struct {
 type Invocation struct {
 	Image       string
 	Platform    string
+	Pull        string // docker --pull policy (always|missing|never); empty = docker default
 	Workdir     string
 	Entrypoint  string
 	Cmd         []string
@@ -30,6 +31,9 @@ func (i Invocation) Args() []string {
 	args := []string{"run", "--rm"}
 	if i.Platform != "" {
 		args = append(args, "--platform", i.Platform)
+	}
+	if i.Pull != "" {
+		args = append(args, "--pull", i.Pull)
 	}
 	if i.TTY {
 		args = append(args, "-it")

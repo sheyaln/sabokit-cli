@@ -17,6 +17,7 @@ func TestArgsFull(t *testing.T) {
 	inv := Invocation{
 		Image:      "img:v1",
 		Platform:   "linux/amd64",
+		Pull:       "always",
 		Workdir:    "/work",
 		Entrypoint: "ansible-playbook",
 		Cmd:        []string{"deploy.yml", "--tags", "espocrm"},
@@ -32,6 +33,7 @@ func TestArgsFull(t *testing.T) {
 	want := []string{
 		"run", "--rm",
 		"--platform", "linux/amd64",
+		"--pull", "always",
 		"-it", "--network", "host",
 		"-w", "/work",
 		"-v", "/host/work:/work",
