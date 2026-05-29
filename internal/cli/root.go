@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/sheyaln/sabokit-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -31,6 +32,13 @@ func NewRootCmd() *cobra.Command {
 	// terraform half. SABOKIT_IMAGE / --image override.
 	defaultImage := os.Getenv("SABOKIT_IMAGE")
 	defaultPlatform := os.Getenv("SABOKIT_PLATFORM")
+	if defaultPlatform == "" {
+		// Pin the host's native arch so docker pulls the matching variant from
+		// each image's multi-arch manifest, and never silently emulates (eg.
+		// when DOCKER_DEFAULT_PLATFORM is set). terraform, scaleway/cli, and
+		// sabokit-runner all ship linux/amd64 + linux/arm64.
+		defaultPlatform = "linux/" + runtime.GOARCH
+	}
 	defaultEnv := os.Getenv("SABOKIT_ENV")
 	defaultScwImage := DefaultScwImage
 	if env := os.Getenv("SABOKIT_SCW_IMAGE"); env != "" {
@@ -63,7 +71,7 @@ env vars:
   SABOKIT_IMAGE                       overrides --image default (runner for ansible/terraform)
   SABOKIT_SCW_IMAGE                   overrides --scw-image default (scaleway cli for secrets ops)
   SABOKIT_TF_IMAGE                    overrides --tf-image default (terraform for up/destroy)
-  SABOKIT_PLATFORM                    sets docker --platform (eg. linux/amd64 on arm64 hosts)
+  SABOKIT_PLATFORM                    docker --platform override (defaults to host arch; all images are multi-arch)
   SABOKIT_ENV                         overrides .sabokit/config.yml default_env
 
 passed through to the runner image:
@@ -80,7 +88,7 @@ passed through to the runner image:
 	cmd.PersistentFlags().StringVar(&globals.Image, "image", defaultImage, "runner image ref for ansible (repository:tag); default: sabokit-runner at the env's pinned version; env: SABOKIT_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.ScwImage, "scw-image", defaultScwImage, "scaleway cli image ref for secrets ops; env: SABOKIT_SCW_IMAGE")
 	cmd.PersistentFlags().StringVar(&globals.TFImage, "tf-image", defaultTFImage, "terraform image ref for up/destroy; env: SABOKIT_TF_IMAGE")
-	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override (eg. linux/amd64); env: SABOKIT_PLATFORM")
+	cmd.PersistentFlags().StringVar(&globals.Platform, "platform", defaultPlatform, "docker --platform override; defaults to host arch (eg. force emulation with linux/amd64); env: SABOKIT_PLATFORM")
 	cmd.PersistentFlags().StringVar(&globals.Env, "env", defaultEnv, "environment name under environments/<env>/; env: SABOKIT_ENV (overrides .sabokit/config.yml default_env)")
 	cmd.PersistentFlags().BoolVar(&globals.SkipVersionCheck, "skip-version-check", false, "skip the CLI⇄blueprint compatibility check (unsafe: mismatched terraform/ansible can corrupt state)")
 	cmd.PersistentFlags().BoolVarP(&globals.Verbose, "verbose", "v", false, "verbose output")

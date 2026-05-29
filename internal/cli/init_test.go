@@ -253,10 +253,15 @@ func TestWriteEnvrcExampleHasSCWVars(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(filepath.Join(dir, ".envrc.example"))
-	for _, must := range []string{"SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_PROJECT_ID", "SABOKIT_PLATFORM"} {
+	for _, must := range []string{"SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_PROJECT_ID"} {
 		if !strings.Contains(string(body), must) {
 			t.Errorf(".envrc.example missing %q", must)
 		}
+	}
+	// SABOKIT_PLATFORM is no longer scaffolded — the CLI defaults to the host
+	// arch and every image is multi-arch.
+	if strings.Contains(string(body), "SABOKIT_PLATFORM") {
+		t.Errorf(".envrc.example should not pin SABOKIT_PLATFORM:\n%s", body)
 	}
 }
 

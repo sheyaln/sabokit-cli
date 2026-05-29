@@ -24,7 +24,6 @@ same install-dir resolution as above (`SABOKIT_INSTALL_DIR` to override). `sabok
 
 ```bash
 export SCW_ACCESS_KEY=... SCW_SECRET_KEY=... SCW_DEFAULT_PROJECT_ID=...
-export SABOKIT_PLATFORM=linux/amd64   # arm64 hosts only
 
 sabokit init my-stack
 # scaffolds project + env(s) + state buckets end-to-end. prompts for
@@ -73,7 +72,7 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 global flags:
 - `--image <repo:tag>` (default: `ghcr.io/sheyaln/sabokit-runner` at the env's pinned sabokit version) — runner image for ansible; env `SABOKIT_IMAGE`
 - `--scw-image <repo:tag>` (default `scaleway/cli:2.56`) — official scaleway cli image used for `secrets *`; env `SABOKIT_SCW_IMAGE`
-- `--platform <p>` — docker `--platform` override (eg. `linux/amd64` on arm64 hosts when an image is amd64-only); env `SABOKIT_PLATFORM`
+- `--platform <p>` — docker `--platform` override; defaults to the host's native arch (all images are multi-arch). Set eg. `linux/amd64` to force emulation; env `SABOKIT_PLATFORM`
 - `--env <name>` — environment name under `environments/<env>/`; overrides `.sabokit/config.yml`'s `default_env`; env `SABOKIT_ENV`
 - `-v/--verbose`
 
@@ -105,7 +104,7 @@ with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in
 beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list|add|remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are semver `vX.Y.Z`; the CLI supports a range of blueprint versions and each env pins its own via terraform `?ref=` (see `sabokit version`).
 
 execution models per command:
-- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). `ghcr.io/sheyaln/sabokit-runner` tagged at the env's pinned sabokit version; playbooks at `/opt/sabokit/platform/ansible/`. amd64-only — set `SABOKIT_PLATFORM=linux/amd64` on arm64 hosts.
+- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). `ghcr.io/sheyaln/sabokit-runner` tagged at the env's pinned sabokit version; playbooks at `/opt/sabokit/platform/ansible/`. multi-arch (`linux/amd64` + `linux/arm64`); the CLI selects the host's arch automatically.
 - **docker (hashicorp/terraform image)**: `up` (TF apply/output/import), `destroy`. Default `hashicorp/terraform:1.13`; override with `--tf-image` / `SABOKIT_TF_IMAGE`.
 - **docker (scaleway/cli image)**: `secrets *`, `up` (reading the Authentik admin secret). Decoupled from the runner image.
 - **local**: `init` (git clone + copy of consumer-template into your project dir), `ssh` (`ssh user@host` passthrough), `logs` (ssh + remote docker), `apps add/remove` (config.tf editing).

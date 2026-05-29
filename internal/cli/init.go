@@ -278,9 +278,6 @@ export SCW_SECRET_KEY="..."
 export SCW_DEFAULT_PROJECT_ID="..."
 export SCW_DEFAULT_REGION="fr-par"
 export SCW_DEFAULT_ZONE="fr-par-1"
-
-# arm64 hosts must set this — sabokit-runner + scaleway/cli are amd64-only
-export SABOKIT_PLATFORM="linux/amd64"
 `
 	return os.WriteFile(path, []byte(content), 0o644)
 }

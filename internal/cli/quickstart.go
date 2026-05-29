@@ -36,9 +36,6 @@ prerequisites:
    export SCW_DEFAULT_REGION=fr-par
    export SCW_DEFAULT_ZONE=fr-par-1
 
-   # arm64 hosts: the runner image is amd64-only
-   export SABOKIT_PLATFORM=linux/amd64
-
 2. scaffold project + envs + state buckets in one shot
    ---------------------------------------------------
    sabokit init my-stack
@@ -103,7 +100,7 @@ troubleshooting:
   - "no .tf-output.json"                          → run up.sh in the env dir first
   - "docker daemon not reachable"                 → start docker desktop / dockerd
   - "ssh permission denied"                       → ssh-add your key
-  - "no matching manifest" on docker pull         → export SABOKIT_PLATFORM=linux/amd64
+  - "no matching manifest" on docker pull         → image lacks your arch; force one with SABOKIT_PLATFORM=linux/amd64
 
 see 'sabokit <command> --help' for full flag detail.
 `
