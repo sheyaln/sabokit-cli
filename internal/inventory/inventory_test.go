@@ -54,7 +54,11 @@ func TestRenderDefaultUser(t *testing.T) {
 }
 
 func TestFromTFOutput(t *testing.T) {
+	// Sibling string-valued outputs must not derail parsing — only
+	// compute_hosts is typed as a host map.
 	raw := `{
+		"authentik_identity_domain": { "value": "https://sso.example.org" },
+		"infra_email": { "value": "ops@example.org" },
 		"compute_hosts": {
 			"value": {
 				"apps": {
