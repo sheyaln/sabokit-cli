@@ -5,7 +5,8 @@ package ansiblevars
 
 import (
 	"encoding/json"
-	"fmt"
+
+	"github.com/sheyaln/sabokit-cli/internal/tfoutput"
 )
 
 // Keys lists the top-level TF output names that get pulled into
@@ -32,19 +33,15 @@ func Project(tfOutput []byte) ([]byte, error) {
 // ProjectKeys is Project but with an explicit key list; useful for tests
 // or callers that need a different subset.
 func ProjectKeys(tfOutput []byte, keys []string) ([]byte, error) {
-	var doc map[string]struct {
-		Value json.RawMessage `json:"value"`
-	}
-	if err := json.Unmarshal(tfOutput, &doc); err != nil {
-		return nil, fmt.Errorf("parse tf output: %w", err)
+	doc, err := tfoutput.Parse(tfOutput)
+	if err != nil {
+		return nil, err
 	}
 	out := make(map[string]json.RawMessage, len(keys))
 	for _, k := range keys {
-		entry, ok := doc[k]
-		if !ok {
-			continue
+		if raw, ok := doc.Raw(k); ok {
+			out[k] = raw
 		}
-		out[k] = entry.Value
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

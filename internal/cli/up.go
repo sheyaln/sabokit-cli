@@ -20,6 +20,7 @@ import (
 	"github.com/sheyaln/sabokit-cli/internal/project"
 	"github.com/sheyaln/sabokit-cli/internal/scw"
 	"github.com/sheyaln/sabokit-cli/internal/tf"
+	"github.com/sheyaln/sabokit-cli/internal/tfoutput"
 	"github.com/sheyaln/sabokit-cli/internal/wait"
 	"github.com/spf13/cobra"
 )
@@ -401,18 +402,16 @@ func runConfigurePhases(p *project.Project, envName, envDir string, tfClient *tf
 
 // extractHostIPs pulls the public_ip out of every entry in compute_hosts.
 func extractHostIPs(tfOut []byte) ([]string, error) {
-	var doc map[string]struct {
-		Value map[string]inventory.ComputeHost `json:"value"`
-	}
-	if err := json.Unmarshal(tfOut, &doc); err != nil {
+	doc, err := tfoutput.Parse(tfOut)
+	if err != nil {
 		return nil, err
 	}
-	hosts, ok := doc["compute_hosts"]
-	if !ok {
-		return nil, fmt.Errorf("compute_hosts not in TF output")
+	var hosts map[string]inventory.ComputeHost
+	if err := doc.Decode("compute_hosts", &hosts); err != nil {
+		return nil, err
 	}
-	ips := make([]string, 0, len(hosts.Value))
-	for _, h := range hosts.Value {
+	ips := make([]string, 0, len(hosts))
+	for _, h := range hosts {
 		if h.PublicIP != "" {
 			ips = append(ips, h.PublicIP)
 		}
@@ -662,18 +661,16 @@ func paginationCount(doc map[string]any) int {
 // output, accesses the scaleway secret, and pulls .api_token from the
 // JSON-encoded payload.
 func readAuthentikAdminToken(scwClient *scw.Client, tfOut []byte) (string, error) {
-	var doc map[string]struct {
-		Value string `json:"value"`
-	}
-	if err := json.Unmarshal(tfOut, &doc); err != nil {
+	doc, err := tfoutput.Parse(tfOut)
+	if err != nil {
 		return "", err
 	}
-	secretRef, ok := doc["authentik_admin_secret_id"]
-	if !ok || secretRef.Value == "" {
+	secretID, _ := doc.String("authentik_admin_secret_id")
+	if secretID == "" {
 		return "", fmt.Errorf("authentik_admin_secret_id not in TF output — did the up phase complete?")
 	}
 	// scaleway emits "<region>/<uuid>"; CLI wants the bare UUID.
-	uuid := secretRef.Value
+	uuid := secretID
 	if idx := strings.LastIndex(uuid, "/"); idx >= 0 {
 		uuid = uuid[idx+1:]
 	}

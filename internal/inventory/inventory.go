@@ -4,10 +4,11 @@
 package inventory
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/sheyaln/sabokit-cli/internal/tfoutput"
 )
 
 // ComputeHost mirrors the per-host shape consumer-template's TF emits.
@@ -63,22 +64,13 @@ func Render(envName string, hosts map[string]ComputeHost) string {
 // FromTFOutput extracts compute_hosts from a `terraform output -json` blob
 // and renders an inventory.
 func FromTFOutput(envName string, tfOutput []byte) (string, error) {
-	// Defer every output's value as raw JSON; only compute_hosts is a
-	// map[string]ComputeHost. Sibling outputs (identity_domain, secret IDs,
-	// infra_email, …) are strings — typing them all alike would fail here.
-	var doc map[string]struct {
-		Value json.RawMessage `json:"value"`
-	}
-	if err := json.Unmarshal(tfOutput, &doc); err != nil {
-		return "", fmt.Errorf("parse tf output: %w", err)
-	}
-	entry, ok := doc["compute_hosts"]
-	if !ok {
-		return "", fmt.Errorf("compute_hosts not in terraform output")
+	doc, err := tfoutput.Parse(tfOutput)
+	if err != nil {
+		return "", err
 	}
 	var hosts map[string]ComputeHost
-	if err := json.Unmarshal(entry.Value, &hosts); err != nil {
-		return "", fmt.Errorf("parse compute_hosts: %w", err)
+	if err := doc.Decode("compute_hosts", &hosts); err != nil {
+		return "", err
 	}
 	if len(hosts) == 0 {
 		return "", fmt.Errorf("compute_hosts is empty")
