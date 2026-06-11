@@ -1,6 +1,6 @@
 # sabokit-cli
 
-cli for deploying and operating sabokit stacks. shells out to the `sabokit-runner` image for terraform + ansible; you don't install either locally.
+cli for deploying and operating sabokit stacks. the consumer-template layer scripts are the runbook; sabokit runs them inside the `sabokit-runner` image (terraform + ansible + scw baked in) and adds preflight checks, confirmation gates, and scaffolding on top. you install none of the tooling locally.
 
 ## install
 
@@ -32,15 +32,17 @@ sabokit init my-stack
 
 cd my-stack
 
-# optionally tweak compute_hosts / identity / apps for your env
-$EDITOR environments/prod/config.tf
+# review the per-layer YAML — apps, tiers, hosts, watchers
+$EDITOR environments/prod/application.yml
 
-sabokit up   # preflight + provision + configure, end-to-end
+sabokit up   # preflight + all four layers (infra → identity →
+             # operations → application), end-to-end, one command
 
 # now sabokit takes over (env is auto from default_env):
-sabokit deploy --apps espocrm --check     # apps.yml --check
-sabokit deploy --apps espocrm             # apps.yml for real
-sabokit status                            # tf outputs + docker ps
+sabokit deploy --apps espocrm --check     # ansible-only redeploy, dry run
+sabokit deploy --apps espocrm             # ansible-only redeploy
+sabokit up --layers application           # tf + ansible for app changes
+sabokit status                            # enabled apps + docker ps
 sabokit secrets list --tag authentik      # works independently
 ```
 
@@ -48,26 +50,28 @@ run `sabokit quickstart` for the full walkthrough with troubleshooting.
 
 ## requires
 
-- docker (daemon must be running for `deploy`/`down`/`status`/`up`/`secrets`)
+- docker (daemon must be running for `up`/`deploy`/`down`/`destroy`/`status`/`refresh`/`secrets`)
 - ssh (for `ssh`/`logs` and as ansible's transport)
 
 ## commands
 
 | command | what |
 | --- | --- |
-| `sabokit init <name> [--env X --base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, optionally bootstrap `environments/<env>/`, write `.sabokit/config.yml` |
+| `sabokit init <name> [--env X --base-domain X --region X --ssh-user/-key X --non-interactive]` | clone consumer-template at pinned tag, scaffold `environments/<env>/` (env.yml + per-layer backend.hcl), write `.sabokit/config.yml`, create state buckets |
 | `sabokit config init [--force]` / `sabokit config show` | interactively (re)generate `.sabokit/config.yml` in cwd, or print the loaded config + path |
-| `sabokit up [--skip-up --skip-configure --backend-config F --parallelism N]` | full first-deploy in pure Go — terraform via `hashicorp/terraform:1.13`, ansible via sabokit-runner, secrets via scaleway/cli. No local terraform/ansible/scw/python required. |
-| `sabokit deploy [--apps X --servers Y --base --rotate-secrets --check --overlay F]` | ansible-playbook apps.yml (or site.yml with --base) against `environments/<env>/` |
+| `sabokit up [--layers X,Y --skip-preflight --no-confirm]` | end-to-end bring-up: preflight (creds, ssh key, DNS zone, backends, bucket) + one confirmation, then the four layer scripts in order inside the runner |
+| `sabokit deploy [--apps X --servers Y --all --rotate-secrets --check]` | scripts/deploy.sh — ansible-only redeploy (no terraform) with the selected tags |
+| `sabokit refresh` | scripts/refresh.sh — regenerate `inventory.ini` + `.enabled_apps.json` from terraform state |
 | `sabokit down --apps X [--servers Y]` | ansible-playbook down.yml — stop containers, leave cloud resources |
-| `sabokit destroy {--apps X[,Y] \| --layer base\|identity\|apps \| --all} [-y]` | local `terraform destroy` in the env dir with the right `-target=` |
-| `sabokit status [--apps X] [--servers Y]` | terraform outputs per layer + `docker ps` across hosts |
+| `sabokit destroy {--layer infra\|identity\|operations\|application \| --all} [-y]` | scripts/destroy-layer.sh or scripts/down.sh — terraform destroy per layer or everything in reverse dependency order |
+| `sabokit status [--apps X] [--servers Y]` | enabled apps (from `.enabled_apps.json`) + `docker ps` across hosts |
 | `sabokit ssh <host>` | passthrough to `ssh <user>@<host>` |
 | `sabokit logs <app> [--servers H] [--group G] [--container C] [--tail N] [-f]` | `docker logs` over ssh — host resolved from env's `inventory.ini` `[apps]` group by default, override with `--group` (eg. `identity`) or `--servers` |
 | `sabokit secrets list/get/versions/create/rotate/delete` | name-first scaleway secret management — collapses uuid lookups + base64 decoding |
-| `sabokit apps list [--enabled]` | catalog (NAME, CATEGORY, DESCRIPTION) by default; `--enabled` shows env-resolved enabled apps with URLs from `.ansible-vars.json` |
-| `sabokit apps add <name>` / `sabokit apps remove <name>` | edit `environments/<env>/config.tf` — uncomment or flip `enabled` for the named app, validated against the catalog |
-| `sabokit version` | binary version + default runner image |
+| `sabokit apps list [--enabled]` | catalog (NAME, CATEGORY, DESCRIPTION) by default; `--enabled` shows env-resolved enabled apps with URLs from `.enabled_apps.json` |
+| `sabokit apps add <name>` / `sabokit apps remove <name>` | edit `environments/<env>/application.yml` — uncomment or flip `enabled:` for the named app, validated against the catalog |
+| `sabokit env add <name> --from <env>` | scaffold a new env by carbon-copying an existing one (per-layer backends regenerated, env.yml reset, state bucket created) |
+| `sabokit version` | binary version + supported blueprint range + every env's pin |
 
 global flags:
 - `--image <repo:tag>` (default: `ghcr.io/sheyaln/sabokit-runner` at the env's pinned sabokit version) — runner image for ansible; env `SABOKIT_IMAGE`
@@ -98,16 +102,17 @@ inventory: inventory.ini        # default; resolved inside the env dir
 apps_manifest: apps-manifest.yaml  # default; project root
 ```
 
-with `default_env: prod`, sabokit mounts `environments/prod/` as `/workspace` in the runner image. `inventory.ini`, `config.tf`, `.tf-output.json`, and `.ansible-vars.json` all live there (consumer-template's shape). override per-call with `--env <name>` or `SABOKIT_ENV=<name>`.
+with `default_env: prod`, sabokit mounts the whole consumer repo at `/workspace/consumer` in the runner image and runs the layer scripts with the repo as cwd. the env's committed YAML (`env.yml` + per-layer files), the per-layer terraform roots, and the derived `inventory.ini` / `.enabled_apps.json` all live under `environments/prod/` (consumer-template's shape). override per-call with `--env <name>` or `SABOKIT_ENV=<name>`.
+
+the layer scripts themselves resolve consumer-first: a vendored `scripts/` in your repo wins; otherwise sabokit runs the copy baked into the runner image at exactly the blueprint tag your env pins.
 
 ## status
 
-beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `down`, `status`, `destroy`, `apps list|add|remove`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are semver `vX.Y.Z`; the CLI supports a range of blueprint versions and each env pins its own via terraform `?ref=` (see `sabokit version`).
+beta. shipped surface: `init`, `config init|show`, `up`, `deploy`, `refresh`, `down`, `status`, `destroy`, `apps list|add|remove`, `env add`, `ssh`, `logs`, `secrets *`, `quickstart`, `version`. roadmap + status table in [FEATURES.md](FEATURES.md). versions are semver `vX.Y.Z`; the CLI supports a range of blueprint versions and each env pins its own via the per-layer terraform `?ref=` (see `sabokit version`).
 
 execution models per command:
-- **docker (sabokit-runner image)**: `deploy`, `down`, `status` (container-state section), `up` (the ansible bootstrap phase). `ghcr.io/sheyaln/sabokit-runner` tagged at the env's pinned sabokit version; playbooks at `/opt/sabokit/platform/ansible/`. multi-arch (`linux/amd64` + `linux/arm64`); the CLI selects the host's arch automatically.
-- **docker (hashicorp/terraform image)**: `up` (TF apply/output/import), `destroy`. Default `hashicorp/terraform:1.13`; override with `--tf-image` / `SABOKIT_TF_IMAGE`.
-- **docker (scaleway/cli image)**: `secrets *`, `up` (reading the Authentik admin secret). Decoupled from the runner image.
-- **local**: `init` (git clone + copy of consumer-template into your project dir), `ssh` (`ssh user@host` passthrough), `logs` (ssh + remote docker), `apps add/remove` (config.tf editing).
+- **docker (sabokit-runner image)**: `up`, `deploy`, `refresh`, `destroy`, `down`, `status` (container-state section). `ghcr.io/sheyaln/sabokit-runner` tagged at the env's pinned sabokit version; terraform + ansible + scw + the platform tree + consumer-template baked in. multi-arch (`linux/amd64` + `linux/arm64`); the CLI selects the host's arch automatically.
+- **docker (scaleway/cli image)**: `secrets *`, `up` preflight (project probe, ssh-key upload, DNS zone check, state bucket). Decoupled from the runner image.
+- **local**: `init` (git clone + copy of consumer-template into your project dir), `ssh` (`ssh user@host` passthrough), `logs` (ssh + remote docker), `apps add/remove` (application.yml editing), `env add` (tree copy + backend regen).
 
 the only host requirements are `docker` + `ssh` (+ `git` for `sabokit init`). no terraform, ansible, scw, jq, python3, awk, nc, ssh-keygen on the host. nothing else gets cloned or cached locally beyond what `init` writes into your project dir.

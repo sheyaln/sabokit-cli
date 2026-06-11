@@ -17,19 +17,18 @@ import (
 
 var (
 	// CLI is the sabokit-cli semver, injected via ldflag at build time.
-	CLI = "0.1.0-dev"
+	CLI = "0.2.0-dev"
 
 	// SupportedBlueprintMin is the oldest blueprint major.minor line this CLI
 	// can drive. It is a source constant — bump it when dropping support for
-	// an old line. The CLI is a thin orchestrator, so its coupling to the
-	// blueprint (TF target addresses, output shapes, playbook paths, the
-	// two-pass bootstrap) changes rarely; one binary can usually drive several
-	// blueprint minors.
-	SupportedBlueprintMin = "0.1"
+	// an old line. 0.2 is the floor: the CLI drives the four-layer roots via
+	// the consumer-template layer scripts, which v0.1's single-stack layout
+	// doesn't have.
+	SupportedBlueprintMin = "0.2"
 
 	// SupportedBlueprintMax is the newest blueprint major.minor line this CLI
 	// was built for. Injected at build = the CLI tag's own major.minor.
-	SupportedBlueprintMax = "0.1"
+	SupportedBlueprintMax = "0.2"
 )
 
 // MajorMinor extracts the "X.Y" line from a version or ref string. It accepts

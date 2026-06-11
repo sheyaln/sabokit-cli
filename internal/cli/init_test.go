@@ -6,100 +6,64 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sheyaln/sabokit-cli/internal/envvalues"
+	"github.com/sheyaln/sabokit-cli/internal/project"
 )
 
-// fakeTemplate writes a minimal environments/_template into projectRoot
-// that mirrors the shape of upstream consumer-template's _template dir:
-// the legitimate TF files + the dead artifacts sabokit-cli must strip.
+// fakeTemplate writes a minimal four-layer environments/_template (plus
+// environments/common.yml) into projectRoot, mirroring upstream
+// consumer-template's shape.
 func fakeTemplate(t *testing.T, projectRoot string) {
 	t.Helper()
 	dir := filepath.Join(projectRoot, "environments", "_template")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
+	for _, layer := range project.Layers {
+		if err := os.MkdirAll(filepath.Join(dir, layer), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	files := map[string]string{
-		"main.tf":                "# main",
-		"providers.tf":           "# providers",
-		"variables.tf":           "# vars",
-		"secrets.tf":             "# secrets",
-		"backend.hcl.example":    `bucket = "x"`,
-		"config.tf.example":      configTFExampleFixture(),
-		"env.tf":                 "# env\n",
-		"README.md":              "# README",
-		"inventory.ini.example":  "[apps]\n",
-		"preflight.sh":           "#!/bin/sh\n",
-		"up.sh":                  "#!/bin/sh\n",
-		"configure.sh":           "#!/bin/sh\n",
-		"_lib.sh":                "# lib",
+		"env.yml":         envYMLTemplateFixture(),
+		"hosts.yml":       "compute_hosts:\n  tools:\n    role: apps\n",
+		"infra.yml":       "postgres_enabled: true\n",
+		"identity.yml":    "tier_slots: []\n",
+		"operations.yml":  "grafana:\n  enabled: true\n",
+		"application.yml": "outline:\n  enabled: true\n  hostname: wiki.example.org\n",
+		"README.md":       "# env",
+	}
+	for _, layer := range project.Layers {
+		files[layer+"/stack.tf"] = "module \"" + layer + "\" {\n  source = \"git::https://github.com/sheyaln/sabokit.git//platform/" + layer + "/terraform?ref=v0.2.0\"\n}\n"
+		files[layer+"/providers.tf"] = "# providers"
+		files[layer+"/backend.hcl.example"] = `bucket = "acme-tfstate-prod"` + "\n" + `key = "` + layer + `/terraform.tfstate"` + "\n"
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	common := "org_slug: acme\norg_name: Acme Cooperative\n"
+	if err := os.WriteFile(filepath.Join(projectRoot, "environments", "common.yml"), []byte(common), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func configTFExampleFixture() string {
-	return `locals {
-  config = {
-    org_slug = "acme"
-    org_name = "Acme"
+func envYMLTemplateFixture() string {
+	return `# Per-env identity + sizing.
+scaleway_project_id: "00000000-0000-0000-0000-000000000000" # replace
+scaleway_region: fr-par
+scaleway_zone: fr-par-1
 
-    apps = {
-      outline = {
-        enabled  = true
-        hostname = "wiki.${local.env.base_domain}"
-      }
-    }
-  }
-}
+base_domain: example.org
+mgmt_domain: ""
+identity_domain: auth.example.org
+infra_email: ops@example.org
+
+private_network_subnet: 10.0.0.0/22
+compute_instance_types:
+  tools: DEV1-L
 `
 }
 
-func TestScaffoldEnvStripsDeadArtifacts(t *testing.T) {
-	root := t.TempDir()
-	fakeTemplate(t, root)
-
-	f := &initFlags{
-		baseDomain:    "example.org",
-		gatewayDomain: "auth.example.org",
-		scwProjectID:  "abc-123",
-		orgSlug:       "acme",
-		orgName:       "Acme",
-		infraEmail:    "ops@example.org",
-		region:        "fr-par",
-		zone:          "fr-par-1",
-	}
-	if err := scaffoldEnv(root, "prod", f); err != nil {
-		t.Fatal(err)
-	}
-	envDir := filepath.Join(root, "environments", "prod")
-
-	for _, dead := range deadEnvArtifacts {
-		if _, err := os.Stat(filepath.Join(envDir, dead)); !os.IsNotExist(err) {
-			t.Errorf("dead artifact %q should have been removed", dead)
-		}
-	}
-	// Legitimate files survive.
-	keep := []string{"main.tf", "providers.tf", "variables.tf", "secrets.tf", "env.tf", "README.md", "backend.hcl.example", "config.tf.example"}
-	for _, k := range keep {
-		if _, err := os.Stat(filepath.Join(envDir, k)); err != nil {
-			t.Errorf("expected %q to survive scaffold, got %v", k, err)
-		}
-	}
-	// Generated files exist.
-	for _, gen := range []string{"config.tf", "backend.hcl"} {
-		if _, err := os.Stat(filepath.Join(envDir, gen)); err != nil {
-			t.Errorf("expected generated %q, got %v", gen, err)
-		}
-	}
-}
-
-func TestScaffoldEnvSubstitutesOrgIdentity(t *testing.T) {
-	root := t.TempDir()
-	fakeTemplate(t, root)
-	f := &initFlags{
+func testInitFlags() *initFlags {
+	return &initFlags{
 		baseDomain:    "real.test",
 		gatewayDomain: "auth.real.test",
 		scwProjectID:  "deadbeef-1111-2222-3333-444455556666",
@@ -109,90 +73,102 @@ func TestScaffoldEnvSubstitutesOrgIdentity(t *testing.T) {
 		region:        "nl-ams",
 		zone:          "nl-ams-2",
 	}
-	if err := scaffoldEnv(root, "staging", f); err != nil {
+}
+
+func TestScaffoldEnvMaterialisesEnvYML(t *testing.T) {
+	root := t.TempDir()
+	fakeTemplate(t, root)
+	if err := scaffoldEnv(root, "prod", testInitFlags(), true); err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(filepath.Join(root, "environments", "staging", "config.tf"))
+	body, err := os.ReadFile(filepath.Join(root, "environments", "prod", "env.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(body)
-	// config.tf carries only the org identity; per-env values live in env-values.yml.
-	if !strings.Contains(got, `org_slug = "neworg"`) {
-		t.Errorf("config.tf missing org_slug substitution:\n%s", got)
+	for _, must := range []string{
+		`scaleway_project_id: "deadbeef-1111-2222-3333-444455556666"`,
+		`base_domain: "real.test"`,
+		`identity_domain: "auth.real.test"`,
+		`infra_email: "ops@real.test"`,
+		`scaleway_region: "nl-ams"`,
+		`scaleway_zone: "nl-ams-2"`,
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("env.yml missing %q:\n%s", must, got)
+		}
 	}
-	if !strings.Contains(got, `org_name = "New Org"`) {
-		t.Errorf("config.tf missing org_name substitution:\n%s", got)
+	// untouched keys + comments survive
+	if !strings.Contains(got, "private_network_subnet: 10.0.0.0/22") {
+		t.Errorf("untouched key lost:\n%s", got)
 	}
-	for _, perEnv := range []string{"deadbeef-1111", "real.test", "nl-ams"} {
-		if strings.Contains(got, perEnv) {
-			t.Errorf("per-env value %q must NOT be written into config.tf:\n%s", perEnv, got)
+	if !strings.Contains(got, "# Per-env identity + sizing.") {
+		t.Errorf("comments lost:\n%s", got)
+	}
+}
+
+func TestScaffoldEnvSecondaryGetsPlaceholderProjectID(t *testing.T) {
+	root := t.TempDir()
+	fakeTemplate(t, root)
+	f := testInitFlags()
+	if err := scaffoldEnv(root, "prod", f, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := scaffoldEnv(root, "staging", f, false); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(filepath.Join(root, "environments", "staging", "env.yml"))
+	if strings.Contains(string(body), "deadbeef-1111") {
+		t.Errorf("staging must not reuse prod's project_id:\n%s", body)
+	}
+	if !strings.Contains(string(body), "REPLACE-with-staging-project-uuid") {
+		t.Errorf("staging should get a placeholder project_id:\n%s", body)
+	}
+}
+
+func TestScaffoldEnvWritesPerLayerBackends(t *testing.T) {
+	root := t.TempDir()
+	fakeTemplate(t, root)
+	f := testInitFlags()
+	f.orgSlug = "demo"
+	if err := scaffoldEnv(root, "prod", f, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range project.Layers {
+		body, err := os.ReadFile(filepath.Join(root, "environments", "prod", layer, "backend.hcl"))
+		if err != nil {
+			t.Fatalf("missing %s/backend.hcl: %v", layer, err)
+		}
+		if !strings.Contains(string(body), `bucket = "demo-tfstate-prod"`) {
+			t.Errorf("%s/backend.hcl missing bucket:\n%s", layer, body)
+		}
+		if !strings.Contains(string(body), `key    = "`+layer+`/terraform.tfstate"`) {
+			t.Errorf("%s/backend.hcl missing per-layer key:\n%s", layer, body)
 		}
 	}
 }
 
-func TestMaterialiseEnvValues(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "environments"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f := &initFlags{
-		scwProjectID:  "proj-abc",
-		baseDomain:    "example.org",
-		gatewayDomain: "auth.example.org",
-		infraEmail:    "ops@example.org",
-		region:        "fr-par",
-		zone:          "fr-par-1",
-	}
-	if err := materialiseEnvValues(root, []string{"prod", "staging"}, f); err != nil {
-		t.Fatal(err)
-	}
-	all, err := envvalues.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prod, err := envvalues.Get(root, "prod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if prod.String("scaleway_project_id") != "proj-abc" {
-		t.Errorf("prod project_id = %q, want proj-abc", prod.String("scaleway_project_id"))
-	}
-	if prod.String("base_domain") != "example.org" {
-		t.Errorf("prod base_domain = %q", prod.String("base_domain"))
-	}
-	if err := prod.Require(envvalues.RequiredKeys...); err != nil {
-		t.Errorf("prod slice should satisfy required keys: %v", err)
-	}
-	// additional env gets a distinct placeholder project_id (satisfies the guard).
-	staging, _ := envvalues.Get(root, "staging")
-	if staging.String("scaleway_project_id") == "proj-abc" {
-		t.Errorf("staging must not reuse prod's project_id")
-	}
-	if err := envvalues.CheckDistinctProjectIDs(all); err != nil {
-		t.Errorf("generated envs should have distinct project_ids: %v", err)
-	}
-}
-
-func TestScaffoldEnvBackendHCLBucket(t *testing.T) {
+func TestMaterialiseCommonYML(t *testing.T) {
 	root := t.TempDir()
 	fakeTemplate(t, root)
-	f := &initFlags{orgSlug: "demo", baseDomain: "x.org", gatewayDomain: "auth.x.org",
-		scwProjectID: "1", orgName: "D", infraEmail: "a@x", region: "fr-par", zone: "fr-par-1"}
-	if err := scaffoldEnv(root, "prod", f); err != nil {
+	if err := materialiseCommonYML(root, testInitFlags()); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := os.ReadFile(filepath.Join(root, "environments", "prod", "backend.hcl"))
-	if !strings.Contains(string(body), `bucket = "demo-tfstate-prod"`) {
-		t.Errorf("backend.hcl missing expected bucket name:\n%s", body)
+	body, _ := os.ReadFile(filepath.Join(root, "environments", "common.yml"))
+	got := string(body)
+	if !strings.Contains(got, `org_slug: "neworg"`) {
+		t.Errorf("org_slug not substituted:\n%s", got)
+	}
+	if !strings.Contains(got, `org_name: "New Org"`) {
+		t.Errorf("org_name not substituted:\n%s", got)
 	}
 }
 
 func TestResolveEnvsCombinesEnvAndStaging(t *testing.T) {
 	cases := []struct {
-		name    string
-		f       initFlags
-		want    []string
+		name string
+		f    initFlags
+		want []string
 	}{
 		{"explicit env only", initFlags{envs: []string{"prod"}}, []string{"prod"}},
 		{"explicit envs list", initFlags{envs: []string{"prod", "staging"}}, []string{"prod", "staging"}},
@@ -237,7 +213,7 @@ func TestWriteGitignore(t *testing.T) {
 	}
 	body, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	got := string(body)
-	for _, must := range []string{"*.tfvars", "*.tfstate.backup", "*.tfplan", ".terraform/", ".tf-output.json", ".envrc"} {
+	for _, must := range []string{"*.tfvars", "*.tfstate.backup", "*.tfplan", ".terraform/", ".enabled_apps.json", "inventory.ini", "backend.hcl", ".envrc"} {
 		if !strings.Contains(got, must) {
 			t.Errorf(".gitignore missing %q:\n%s", must, got)
 		}

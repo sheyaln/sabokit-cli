@@ -45,46 +45,48 @@ prerequisites:
    #     --org-slug --org-name --infra-email --env (--staging)
    #
    #   sabokit clones consumer-template, scaffolds environments/<env>/
-   #   with config.tf + backend.hcl pre-filled, and creates the scaleway
-   #   object bucket each env's TF state will live in.
+   #   (env.yml + per-layer backend.hcl pre-filled) and creates the
+   #   scaleway object bucket each env's TF state will live in.
 
    cd my-stack
 
-   # edit config.tf if you need anything beyond the prompted scalars
-   # (compute_hosts, identity tier_slots, per-app blocks)
-   $EDITOR environments/prod/config.tf
+   # review the per-layer YAML — apps, tiers, hosts, watchers
+   $EDITOR environments/prod/application.yml
 
-3. provision the env end-to-end
-   ----------------------------
-   sabokit up   # pure-Go orchestration:
-                #   preflight (config + creds + ssh key in IAM)
-                #   tf apply (base + identity_bootstrap)
-                #   inventory regen, ssh wait, ansible bootstrap
-                #   LE cert wait, blueprint indexing wait
-                #   full tf apply (identity + apps)
-                # uses hashicorp/terraform:1.13, sabokit-runner, scaleway/cli
+3. provision + deploy the env end-to-end — one command
+   ----------------------------------------------------
+   sabokit up   # preflight (creds, ssh key in IAM, DNS zone, backends,
+                #   state bucket) + one confirmation, then the four layer
+                #   scripts inside the runner image, in order:
+                #   infra → identity → operations → application
+                # the identity layer waits for SSH, DNS propagation, the
+                #   Let's Encrypt cert, and Authentik indexing by itself
                 # only host requirements: docker + ssh + git
-                # --skip-preflight / --skip-up / --skip-configure for re-runs
+                # idempotent — re-run after a failure and it resumes
+                # --layers application for a single layer
+                # --no-confirm for unattended runs
 
 4. operate (env is auto from .sabokit/config.yml's default_env)
    ------------------------------------------------------------
    sabokit apps list                        # catalog (what's available)
    sabokit apps list --enabled              # what's running in current env
-   sabokit apps add vikunja                 # enable in config.tf
-   sabokit apps remove jitsi                # disable in config.tf
-   sabokit deploy --apps espocrm --check    # apps.yml --check (dry run)
-   sabokit deploy --apps espocrm            # apps.yml for real
-   sabokit deploy --base                    # site.yml (bootstrap + apps)
-   sabokit status                           # tf-output.json + docker ps
+   sabokit apps add vikunja                 # enable in application.yml
+   sabokit apps remove jitsi                # disable in application.yml
+   sabokit up --layers application          # apply app changes (tf + ansible)
+   sabokit deploy --apps espocrm --check    # ansible-only redeploy (dry run)
+   sabokit deploy --apps espocrm            # ansible-only redeploy
+   sabokit deploy --all                     # bootstrap + everything
+   sabokit refresh                          # regen inventory + enabled_apps
+   sabokit status                           # enabled apps + docker ps
    sabokit logs espocrm -f                  # follow container logs (apps group)
    sabokit logs authentik --group identity  # different ansible group
    sabokit ssh app01-prod                   # shell into the host
    sabokit down --apps espocrm              # stop the containers
-   sabokit destroy --apps espocrm           # terraform destroy -target=...
-   sabokit destroy --all                    # terraform destroy (entire env)
+   sabokit destroy --layer application      # terraform destroy one layer
+   sabokit destroy --all                    # tear down the entire env
 
    # override env per-call:
-   sabokit --env staging deploy --apps espocrm
+   sabokit --env staging up
 
 5. inspect or rotate secrets (independent of runner image)
    -------------------------------------------------------
@@ -97,7 +99,7 @@ prerequisites:
 troubleshooting:
   - "no .sabokit/config.yml found"                → cd into your project dir
   - "environment X not found"                     → check environments/<X>/ exists
-  - "no .tf-output.json"                          → run up.sh in the env dir first
+  - "no .enabled_apps.json"                       → run 'sabokit refresh'
   - "docker daemon not reachable"                 → start docker desktop / dockerd
   - "ssh permission denied"                       → ssh-add your key
   - "no matching manifest" on docker pull         → image lacks your arch; force one with SABOKIT_PLATFORM=linux/amd64

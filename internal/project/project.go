@@ -84,8 +84,29 @@ func (p *Project) InventoryPath() string {
 	return filepath.Join(p.Root, p.Config.Inventory)
 }
 
+// Layers are the four-layer composition roots under environments/<env>/, in
+// apply order. Teardown runs them in reverse.
+var Layers = []string{"infra", "identity", "operations", "application"}
+
+// IsFourLayer reports whether the env follows the four-layer layout:
+// environments/<env>/env.yml plus per-layer roots (infra/stack.tf as the
+// sentinel). Legacy envs carry a single main.tf instead.
+func (p *Project) IsFourLayer(envOverride string) bool {
+	env := p.EnvName(envOverride)
+	if env == "" {
+		return false
+	}
+	dir := filepath.Join(p.Root, "environments", env)
+	if _, err := os.Stat(filepath.Join(dir, "env.yml")); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "infra", "stack.tf"))
+	return err == nil
+}
+
 // Envs returns the environment names under environments/ — directories that
-// contain a main.tf, excluding _template.
+// contain either a four-layer infra/stack.tf or a legacy main.tf, excluding
+// _template.
 func (p *Project) Envs() []string {
 	entries, err := os.ReadDir(filepath.Join(p.Root, "environments"))
 	if err != nil {
@@ -96,10 +117,14 @@ func (p *Project) Envs() []string {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(p.Root, "environments", e.Name(), "main.tf")); err != nil {
+		dir := filepath.Join(p.Root, "environments", e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "infra", "stack.tf")); err == nil {
+			out = append(out, e.Name())
 			continue
 		}
-		out = append(out, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "main.tf")); err == nil {
+			out = append(out, e.Name())
+		}
 	}
 	return out
 }
@@ -137,23 +162,15 @@ func (p *Project) WorkspaceDir(envOverride string) (string, error) {
 	return dir, nil
 }
 
-// AnsibleVarsPath returns the host path to .ansible-vars.json for the
-// current env, or "" when no env is configured.
-func (p *Project) AnsibleVarsPath(envOverride string) string {
+// EnabledAppsPath returns the host path to .enabled_apps.json for the
+// current env (written by scripts/refresh.sh and the layer scripts), or ""
+// when no env is configured.
+func (p *Project) EnabledAppsPath(envOverride string) string {
 	dir, err := p.WorkspaceDir(envOverride)
 	if err != nil || p.EnvName(envOverride) == "" {
 		return ""
 	}
-	return filepath.Join(dir, ".ansible-vars.json")
-}
-
-// TFOutputPath returns the host path to .tf-output.json for the current env.
-func (p *Project) TFOutputPath(envOverride string) string {
-	dir, err := p.WorkspaceDir(envOverride)
-	if err != nil || p.EnvName(envOverride) == "" {
-		return ""
-	}
-	return filepath.Join(dir, ".tf-output.json")
+	return filepath.Join(dir, ".enabled_apps.json")
 }
 
 type appsManifest struct {
@@ -201,7 +218,7 @@ func (p *Project) Catalog() ([]CatalogApp, error) {
 }
 
 // EnvApp is the env-resolved view of an app: enabled state plus the URL TF
-// computed for it (when enabled). Sourced from .ansible-vars.json's
+// computed for it (when enabled). Sourced from .enabled_apps.json's
 // enabled_apps map.
 type EnvApp struct {
 	ID      string
@@ -275,41 +292,26 @@ func (p *Project) InventoryHosts(envOverride, group string) ([]string, error) {
 	return hosts, nil
 }
 
-type ansibleVars struct {
-	EnabledApps  map[string]ansibleEnabledApp `json:"enabled_apps"`
-	ComputeHosts map[string]ansibleHost       `json:"compute_hosts"`
+type enabledAppsFile struct {
+	EnabledApps map[string]ansibleEnabledApp `json:"enabled_apps"`
 }
 
 type ansibleEnabledApp struct {
 	URL string `json:"url"`
 }
 
-type ansibleHost struct {
-	PublicIP      string   `json:"public_ip"`
-	AnsibleGroup  string   `json:"ansible_group"`
-	AnsibleGroups []string `json:"ansible_groups"`
-}
-
-func (p *Project) loadAnsibleVars(envOverride string) (*ansibleVars, error) {
-	path := p.AnsibleVarsPath(envOverride)
+func (p *Project) loadEnabledAppsMap(envOverride string) (map[string]ansibleEnabledApp, error) {
+	path := p.EnabledAppsPath(envOverride)
 	if path == "" {
 		return nil, fmt.Errorf("no env set (pass --env or set default_env in .sabokit/config.yml)")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w (run up.sh in the env dir to generate)", path, err)
+		return nil, fmt.Errorf("read %s: %w (run 'sabokit refresh' or scripts/refresh.sh to generate)", path, err)
 	}
-	var v ansibleVars
+	var v enabledAppsFile
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return &v, nil
-}
-
-func (p *Project) loadEnabledAppsMap(envOverride string) (map[string]ansibleEnabledApp, error) {
-	v, err := p.loadAnsibleVars(envOverride)
-	if err != nil {
-		return nil, err
 	}
 	return v.EnabledApps, nil
 }

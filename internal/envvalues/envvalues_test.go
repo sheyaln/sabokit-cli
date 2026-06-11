@@ -97,3 +97,53 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("expected error for missing env-values.yml")
 	}
 }
+
+func TestForEnvPrefersEnvYML(t *testing.T) {
+	root := writeEnvValues(t, sample)
+	envDir := filepath.Join(root, "environments", "prod")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envYML := "scaleway_project_id: \"proj-prod-v2\"\nbase_domain: \"example.org\"\n"
+	if err := os.WriteFile(filepath.Join(envDir, "env.yml"), []byte(envYML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ForEnv(root, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.String("scaleway_project_id"); got != "proj-prod-v2" {
+		t.Errorf("ForEnv should prefer env.yml, got %q", got)
+	}
+	// staging has no env.yml → legacy block
+	s2, err := ForEnv(root, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.String("scaleway_project_id"); got != "proj-staging" {
+		t.Errorf("ForEnv legacy fallback got %q", got)
+	}
+}
+
+func TestLoadResolvedMergesLayouts(t *testing.T) {
+	root := writeEnvValues(t, sample)
+	envDir := filepath.Join(root, "environments", "dev")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "env.yml"), []byte("scaleway_project_id: \"proj-dev\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	all, err := LoadResolved(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range []string{"prod", "staging", "dev"} {
+		if _, ok := all[env]; !ok {
+			t.Errorf("LoadResolved missing %q (got %v)", env, Names(all))
+		}
+	}
+	if err := CheckDistinctProjectIDs(all); err != nil {
+		t.Errorf("distinct ids should pass: %v", err)
+	}
+}
