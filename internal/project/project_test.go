@@ -57,7 +57,7 @@ func TestWorkspaceDir(t *testing.T) {
 	}
 }
 
-func TestAnsibleVarsAndTFOutputPaths(t *testing.T) {
+func TestEnabledAppsPath(t *testing.T) {
 	dir := t.TempDir()
 	envDir := filepath.Join(dir, "environments", "prod")
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
@@ -65,21 +65,35 @@ func TestAnsibleVarsAndTFOutputPaths(t *testing.T) {
 	}
 	p := &Project{Root: dir, Config: Config{DefaultEnv: "prod"}}
 
-	want := filepath.Join(envDir, ".ansible-vars.json")
-	if got := p.AnsibleVarsPath(""); got != want {
-		t.Errorf("AnsibleVarsPath = %q, want %q", got, want)
-	}
-	want = filepath.Join(envDir, ".tf-output.json")
-	if got := p.TFOutputPath(""); got != want {
-		t.Errorf("TFOutputPath = %q, want %q", got, want)
+	want := filepath.Join(envDir, ".enabled_apps.json")
+	if got := p.EnabledAppsPath(""); got != want {
+		t.Errorf("EnabledAppsPath = %q, want %q", got, want)
 	}
 
 	pNoEnv := &Project{Root: dir, Config: Config{}}
-	if got := pNoEnv.AnsibleVarsPath(""); got != "" {
-		t.Errorf("no env AnsibleVarsPath = %q, want empty", got)
+	if got := pNoEnv.EnabledAppsPath(""); got != "" {
+		t.Errorf("no env EnabledAppsPath = %q, want empty", got)
 	}
-	if got := pNoEnv.TFOutputPath(""); got != "" {
-		t.Errorf("no env TFOutputPath = %q, want empty", got)
+}
+
+func TestIsFourLayer(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "prod")
+	if err := os.MkdirAll(filepath.Join(envDir, "infra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{Root: dir, Config: Config{DefaultEnv: "prod"}}
+	if p.IsFourLayer("") {
+		t.Error("env.yml + infra/stack.tf absent → not four-layer")
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "env.yml"), []byte("base_domain: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "infra", "stack.tf"), []byte("# stack"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !p.IsFourLayer("") {
+		t.Error("env.yml + infra/stack.tf present → four-layer")
 	}
 }
 
@@ -142,7 +156,7 @@ apps:
 	}
 }
 
-func TestEnvAppsFromAnsibleVars(t *testing.T) {
+func TestEnvAppsFromEnabledAppsJSON(t *testing.T) {
 	dir := t.TempDir()
 	envDir := filepath.Join(dir, "environments", "prod")
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
@@ -170,7 +184,7 @@ apps:
 	if err := os.WriteFile(filepath.Join(dir, "apps-manifest.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(envDir, ".ansible-vars.json"), []byte(vars), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(envDir, ".enabled_apps.json"), []byte(vars), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

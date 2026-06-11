@@ -31,7 +31,7 @@ func requireCompatibleBlueprint(p *project.Project) error {
 	if !ok {
 		return fmt.Errorf(`environment pins sabokit %s, but this sabokit CLI (%s) supports blueprints %s.
   → upgrade the CLI:  curl -fsSL https://raw.githubusercontent.com/sheyaln/sabokit-cli/master/install.sh | bash
-  → or re-pin the env to a supported sabokit version (the modules/stack ?ref=)
+  → or re-pin the env to a supported sabokit version (the ?ref= in each environments/<env>/<layer>/stack.tf)
   override (unsafe — mismatched terraform/ansible can corrupt state): --skip-version-check`,
 			ref, version.CLI, version.SupportedRange())
 	}

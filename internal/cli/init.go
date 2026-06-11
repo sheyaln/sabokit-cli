@@ -7,13 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheyaln/sabokit-cli/internal/configtf"
 	"github.com/sheyaln/sabokit-cli/internal/docker"
+	"github.com/sheyaln/sabokit-cli/internal/project"
 	"github.com/sheyaln/sabokit-cli/internal/scw"
 	"github.com/sheyaln/sabokit-cli/internal/template"
 	"github.com/sheyaln/sabokit-cli/internal/version"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 type initFlags struct {
@@ -43,17 +42,18 @@ func newInitCmd() *cobra.Command {
 		Long: `clones consumer-template from the upstream sabokit repo, copies it into
 <project-name>/, then scaffolds one or more environments end-to-end:
 
-  for each env:
-    cp -r environments/_template environments/<env>
-    config.tf       generated from config.tf.example with prompted values
-    backend.hcl     generated; bucket = "<org-slug>-tfstate-<env>"
-    inventory.ini   skipped — sabokit up regenerates from terraform output
-  creates the scaleway object bucket each env's backend.hcl points at
+  environments/common.yml   org_slug + org_name substituted from prompts
+  for each env (copied from environments/_template):
+    env.yml                 per-env identity (project UUID, domains, email)
+                            from prompts; later envs get placeholders
+    <layer>/backend.hcl     generated ×4; bucket = "<org-slug>-tfstate-<env>"
+    inventory.ini           not scaffolded — regenerated from terraform state
+  creates the scaleway object bucket each env's TF state lives in
     (skip with --skip-bucket; requires SCW_ACCESS_KEY/SCW_SECRET_KEY).
 
-after init, edit environments/env-values.yml for per-env values (project_id,
-domains, sizes) and config.tf for shape (compute_hosts, identity.tier_slots,
-apps) if the prompts didn't capture everything. then 'sabokit up'.
+after init, review environments/<env>/{env.yml,hosts.yml,infra.yml,
+identity.yml,operations.yml,application.yml} — env.yml is identity/sizing,
+the rest is per-layer shape (apps, tiers, watchers). then 'sabokit up'.
 
 interactive mode (default) prompts for every required field; pass
 --non-interactive plus the flags to script the same flow.`,
@@ -137,19 +137,19 @@ func runInit(projectName string, f *initFlags) error {
 	}
 	done()
 
-	for _, env := range envs {
-		done = step(fmt.Sprintf("scaffolding environments/%s/ (config.tf, backend.hcl)", env))
-		if err := scaffoldEnv(target, env, f); err != nil {
+	done = step("writing environments/common.yml (org identity)")
+	if err := materialiseCommonYML(target, f); err != nil {
+		return err
+	}
+	done()
+
+	for i, env := range envs {
+		done = step(fmt.Sprintf("scaffolding environments/%s/ (env.yml, per-layer backend.hcl)", env))
+		if err := scaffoldEnv(target, env, f, i == 0); err != nil {
 			return fmt.Errorf("scaffold env %s: %w", env, err)
 		}
 		done()
 	}
-
-	done = step("writing environments/env-values.yml")
-	if err := materialiseEnvValues(target, envs, f); err != nil {
-		return err
-	}
-	done()
 
 	configInputs := configInputs{
 		project:    projectName,
@@ -179,8 +179,8 @@ func runInit(projectName string, f *initFlags) error {
 	}
 
 	fmt.Printf("\ndone. next: cd %s && sabokit up\n", projectName)
-	fmt.Println("    (per-env values are in environments/env-values.yml; config.tf holds")
-	fmt.Println("     the shape: compute_hosts, identity tier_slots, per-app overrides)")
+	fmt.Println("    (per-env identity/sizing is environments/<env>/env.yml; the layer")
+	fmt.Println("     shape — apps, tiers, watchers — is the sibling per-layer YAML files)")
 	return nil
 }
 
@@ -241,14 +241,17 @@ terraform.tfstate.*
 .terraform/
 .terraform.lock.hcl
 
-# sabokit-derived runtime files (regenerated from terraform output every up/deploy)
-.ansible-vars.json
-.tf-output.json
+# sabokit-derived runtime files (regenerated from terraform state every up/deploy)
+inventory.ini
+.enabled_apps.json
+
+# per-env backend config is generated (sabokit init / env add / up preflight)
+backend.hcl
 
 # terraform plans (often contain secrets in the diff)
 *.tfplan
 
-# per-env values live in the committed environments/env-values.yml; tfvars
+# per-env values live in the committed environments/<env>/env.yml; tfvars
 # are not used by sabokit. treat any stray *.tfvars as secret — never commit.
 *.tfvars
 *.tfvars.json
@@ -256,9 +259,6 @@ terraform.tfstate.*
 # secrets come from the environment / .envrc (direnv) — never commit.
 .envrc
 !.envrc.example
-
-# legacy sabokit cache from pre-2026.05 versions — safe to delete if present
-.sabokit/sabokit-repo/
 
 # editors + OS
 .idea/
@@ -311,17 +311,16 @@ sabokit --env staging up            # operate against a different env
 
 ## per-env config
 
-per-env NON-secret values (project_id, domains, sizes) live in
-`+"`environments/env-values.yml`"+` — one committed, keyed block per env.
-secrets come from the environment / `+"`.envrc`"+`. each
-`+"`environments/<env>/`"+` directory carries:
+each `+"`environments/<env>/`"+` directory carries committed YAML config plus
+four terraform layer roots (`+"`infra`"+` → `+"`identity`"+` → `+"`operations`"+` → `+"`application`"+`),
+each with its own remote state. secrets come from the environment /
+`+"`.envrc`"+` — never from these files.
 
-- `+"`config.tf`"+`        — committed infra shape (locals.config); identical across envs
-- `+"`env.tf`"+`           — committed; resolves this env's env-values.yml slice
-- `+"`secrets.tf`"+`       — committed; `+"`data \"scaleway_secret_version\"`"+` blocks
-- `+"`backend.hcl`"+`      — generated (gitignored); remote-state bucket %s-tfstate-<env>
-- `+"`inventory.ini`"+`    — generated; do not edit (overwritten on every up/deploy)
-- `+"`.tf-output.json`"+` / `+"`.ansible-vars.json`"+` — generated from TF outputs
+- `+"`env.yml`"+`           — per-env identity + sizing (project UUID, domains, instance types)
+- `+"`hosts.yml`"+`         — compute topology (identical across envs)
+- `+"`infra.yml`"+` / `+"`identity.yml`"+` / `+"`operations.yml`"+` / `+"`application.yml`"+` — per-layer shape (apps, tiers, watchers)
+- `+"`<layer>/backend.hcl`"+` — generated (gitignored); remote-state bucket %s-tfstate-<env>, one key per layer
+- `+"`inventory.ini`"+` / `+"`.enabled_apps.json`"+` — generated from terraform state; do not edit
 `, projectName, formatBulletList(envs), envs[0], f.orgSlug)
 	return os.WriteFile(path, []byte(content), 0o644)
 }
@@ -433,12 +432,11 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// scaffoldEnv copies environments/_template into environments/<env>,
-// materialises config.tf + backend.hcl from prompts, and strips dead
-// upstream artifacts that sabokit-cli has taken over (the legacy bash
-// orchestration and the misleading inventory.ini.example placeholder —
-// sabokit up writes the real inventory from terraform output).
-func scaffoldEnv(projectRoot, envName string, f *initFlags) error {
+// scaffoldEnv copies environments/_template into environments/<env> and
+// materialises env.yml + the four per-layer backend.hcl files. The primary
+// env gets the prompted values; later envs get a placeholder project_id
+// (each env needs a distinct project).
+func scaffoldEnv(projectRoot, envName string, f *initFlags, primary bool) error {
 	if strings.ContainsAny(envName, "/\\") {
 		return fmt.Errorf("env name must not contain path separators: %q", envName)
 	}
@@ -453,109 +451,65 @@ func scaffoldEnv(projectRoot, envName string, f *initFlags) error {
 	if err := template.CopyTree(src, dst); err != nil {
 		return err
 	}
-	if err := stripDeadEnvArtifacts(dst); err != nil {
+	if err := materialiseEnvYML(dst, envName, f, primary); err != nil {
 		return err
 	}
-	if err := materialiseConfigTF(dst, f); err != nil {
-		return err
-	}
-	if err := materialiseBackendHCL(dst, envName, f); err != nil {
-		return err
-	}
-	return nil
-}
-
-// deadEnvArtifacts lists files copied from upstream consumer-template
-// that sabokit-cli has fully replaced. Kept as a named var so tests can
-// assert the list end-to-end.
-var deadEnvArtifacts = []string{
-	"inventory.ini.example", // sabokit up regenerates inventory.ini from TF output
-	"preflight.sh",          // sabokit up phase 0
-	"up.sh",                 // sabokit up phases 1-7
-	"configure.sh",          // sabokit up configure phases
-	"_lib.sh",               // shared helpers for the above scripts
-}
-
-func stripDeadEnvArtifacts(envDir string) error {
-	for _, name := range deadEnvArtifacts {
-		path := filepath.Join(envDir, name)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("strip %s: %w", name, err)
+	bucket := fmt.Sprintf("%s-tfstate-%s", f.orgSlug, envName)
+	for _, layer := range project.Layers {
+		if err := writeLayerBackendHCL(dst, layer, bucket); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// materialiseConfigTF writes config.tf from config.tf.example, substituting
-// only the org identity (org_slug/org_name) — the shape that's identical
-// across envs. Per-env values go to env-values.yml (materialiseEnvValues), not
-// here; config.tf references them as local.env.*.
-func materialiseConfigTF(envDir string, f *initFlags) error {
-	examplePath := filepath.Join(envDir, "config.tf.example")
-	raw, err := os.ReadFile(examplePath)
+// materialiseEnvYML substitutes the prompted per-env identity into the
+// copied env.yml. Textual per-key replacement keeps the template's comments
+// (sizing guidance, subnet caveats) intact.
+func materialiseEnvYML(envDir, envName string, f *initFlags, primary bool) error {
+	path := filepath.Join(envDir, "env.yml")
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read config.tf.example: %w", err)
+		return fmt.Errorf("read %s: %w (template may have shifted)", path, err)
+	}
+	projectID := f.scwProjectID
+	if !primary {
+		projectID = "REPLACE-with-" + envName + "-project-uuid"
 	}
 	content := string(raw)
-	substitutions := []struct{ key, value string }{
-		{"org_slug", f.orgSlug},
-		{"org_name", f.orgName},
-	}
-	for _, s := range substitutions {
-		if s.value == "" {
-			continue
+	for k, v := range map[string]string{
+		"scaleway_project_id": projectID,
+		"base_domain":         f.baseDomain,
+		"identity_domain":     f.gatewayDomain,
+		"infra_email":         f.infraEmail,
+		"scaleway_region":     f.region,
+		"scaleway_zone":       f.zone,
+	} {
+		if v != "" {
+			content = setYAMLScalar(content, k, v)
 		}
-		updated, ok := configtf.SetString(content, s.key, s.value)
-		if !ok {
-			return fmt.Errorf("config.tf.example: key %q not found (template may have shifted)", s.key)
-		}
-		content = updated
 	}
-	return os.WriteFile(filepath.Join(envDir, "config.tf"), []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// materialiseEnvValues writes environments/env-values.yml — the committed,
-// keyed per-env values Terraform resolves via env.tf (by directory name). The
-// primary env gets the prompted values; any additional env gets a placeholder
-// project_id (each env needs a distinct project) for the operator to fill in.
-func materialiseEnvValues(target string, envs []string, f *initFlags) error {
-	all := map[string]map[string]any{}
-	for i, env := range envs {
-		block := map[string]any{
-			"scaleway_project_id": f.scwProjectID,
-			"base_domain":         f.baseDomain,
-			"identity_domain":     f.gatewayDomain,
-			"infra_email":         f.infraEmail,
-			"scaleway_region":     f.region,
-			"scaleway_zone":       f.zone,
-		}
-		if i > 0 {
-			block["scaleway_project_id"] = "REPLACE-with-" + env + "-project-uuid"
-		}
-		all[env] = block
-	}
-	body, err := yaml.Marshal(all)
+// materialiseCommonYML substitutes the org identity into the cross-env
+// environments/common.yml.
+func materialiseCommonYML(target string, f *initFlags) error {
+	path := filepath.Join(target, "environments", "common.yml")
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("marshal env-values: %w", err)
+		return fmt.Errorf("read %s: %w (template may have shifted)", path, err)
 	}
-	header := "# Per-env NON-secret values, keyed by env name. Committed to git.\n" +
-		"# Terraform resolves each env's slice via env.tf (by directory name).\n" +
-		"# Secrets (SCW creds, authentik token) come from the environment / .envrc.\n" +
-		"# Optional keys (mgmt_domain, sizes, network) default in env.tf when\n" +
-		"# omitted; see env-values.yml.example for the full set.\n\n"
-	return os.WriteFile(filepath.Join(target, "environments", "env-values.yml"), append([]byte(header), body...), 0o644)
-}
-
-func materialiseBackendHCL(envDir, envName string, f *initFlags) error {
-	bucket := fmt.Sprintf("%s-tfstate-%s", f.orgSlug, envName)
-	content := fmt.Sprintf(`# Generated by sabokit init. Bucket is created in the same step; key is
-# the canonical layout. Override the bucket name only if a naming collision
-# forces you to (S3 namespace is global).
-
-bucket = %q
-key    = "stack/terraform.tfstate"
-`, bucket)
-	return os.WriteFile(filepath.Join(envDir, "backend.hcl"), []byte(content), 0o644)
+	content := string(raw)
+	for k, v := range map[string]string{
+		"org_slug": f.orgSlug,
+		"org_name": f.orgName,
+	} {
+		if v != "" {
+			content = setYAMLScalar(content, k, v)
+		}
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 // ensureStateBuckets creates one Scaleway Object Storage bucket per env

@@ -1,84 +1,64 @@
 # sabokit-cli features plan
 
-Operator-facing roadmap for what sabokit-cli absorbs from `consumer-template/environments/_template/*.sh` and what new lifecycle commands ship on top. Lives in-repo so the plan moves with the code.
+Operator-facing roadmap. Lives in-repo so the plan moves with the code.
 
 ## Mandate
 
-sabokit-cli is the conductor for the deploy lifecycle and the consumer-template scaffolding. Operators never `chmod +x` shell scripts, hand-create state buckets, or `cp -r` scaffolding dirs. Terraform stays declarative. Ansible stays declarative. sabokit-cli sequences, validates, and hides two-pass complexity (Authentik bootstrap) behind one verb.
+sabokit-cli is the conductor for the deploy lifecycle and the consumer-template scaffolding. The `consumer-template/scripts/` layer scripts are the runbook and the single source of truth — the CLI shells out to them inside the runner image (consumer's vendored copy first, baked copy at the pinned tag otherwise) and adds preflight checks, confirmation gates, and scaffolding. Operators never `chmod +x` shell scripts, hand-create state buckets, or `cp -r` scaffolding dirs. Terraform stays declarative. Ansible stays declarative.
 
 ## Host requirements
 
-`docker` + `ssh` + `git` on the host. Nothing else. terraform/ansible/scw/jq/python come from images sabokit invokes (`hashicorp/terraform:1.13`, `ghcr.io/sheyaln/sabokit-runner`, `scaleway/cli:2.56`).
+`docker` + `ssh` + `git` on the host. Nothing else. terraform/ansible/scw/jq/python come from images sabokit invokes (`ghcr.io/sheyaln/sabokit-runner`, `scaleway/cli:2.56`).
 
-## Status (as of the v0.1.0 semver reset)
+## Status (as of the v0.2.0 four-layer rework)
 
 | Area | Shipped | Open |
 | --- | --- | --- |
-| `sabokit init` interactive scaffolding | prompts; project + env(s); per-env `config.tf` + `backend.hcl`; `.gitignore` + `.envrc.example` + `README.md` scaffolds; staging-default-YES; `==> ok` progress cadence | — |
-| State bucket creation | per-env idempotent create via `scaleway/cli`; versioning enabled; `acl=private`; name-length (≤63) precheck | block-public-access (scw doesn't expose a flag; `acl=private` is canonical); bucket-exists-but-different-ownership guard (currently skips silently on name collision) |
-| Preflight (phase 0 of `up`) | config keys + SCW creds + IAM ssh-key upload + DNS-zone-delegation check; gateway DNS propagation wait runs between bootstrap apply and LE-cert wait | — |
-| Init-time validation echo | env-var presence check for `SCW_ACCESS_KEY`/`SCW_SECRET_KEY`; bucket-name length precheck | SCW project probe (`account project get`) before bucket create; SSH-key IAM registration at init (currently deferred to `up`); DNS zone delegation check at init (currently deferred to `up`) |
-| `sabokit up` end-to-end | preflight + plan+confirm+apply (bootstrap) + refresh + ansible bootstrap + DNS-propagation wait + LE-cert wait + Authentik index wait + plan+confirm+apply (configure) + outpost import. Plan-confirm gate defaults yes for non-prod, no for prod; `--no-confirm` bypasses both gates | — |
-| Inventory + `.ansible-vars.json` regen | refreshed before every up/deploy/down/status | — |
-| Two-pass Authentik | hidden behind `sabokit up` | — |
-| ubuntu default ssh user | all sabokit-side fallbacks | upstream `platform/ansible/ansible.cfg` cleanup — out of scope here |
-| `sabokit env add/list/switch` | — | full pack |
-| `sabokit bump <tag>` | — | `?ref=` rewrites + `moved{}` migration prompt |
-| `sabokit upgrade <tag>` | — | `bump` + `deploy` chain with `moved{}` gate |
-| `sabokit import-base-image <tag>` | — | full pack |
-| `sabokit doctor` | — | full pack |
-| `sabokit cost-estimate` | — | Scaleway pricing API call |
-| `sabokit version-check` | — | github tags ping |
+| `sabokit up` four-layer end-to-end | preflight (env.yml keys, distinct project ids, SCW probe, IAM ssh-key upload, DNS-zone delegation, per-layer backend.hcl generation, state-bucket create) + one confirm gate + `scripts/up.sh` (or `--layers` subset) in the runner | — |
+| Layer-script execution model | consumer `scripts/` wins, else baked `/opt/sabokit/consumer-template/scripts/` at the env's pinned tag; repo mounted at `/workspace/consumer`; `/workspace/sabokit` symlink resolves the sibling import | — |
+| `sabokit deploy/refresh/destroy/down` | deploy → `deploy.sh` (ansible-only); refresh → `refresh.sh`; destroy → `destroy-layer.sh`/`down.sh`; down → `down.yml` (compose stop) | — |
+| `sabokit init` | four-layer scaffold: common.yml org identity, per-env env.yml, per-layer backend.hcl ×4, state buckets | interactive review of per-layer YAML (apps, tiers) |
+| `sabokit env add --from` | four-layer carbon-copy: per-layer backend regen, bucket-name suffix swap, env.yml seeding from legacy env-values.yml block or placeholders | `env list`, `env switch`, non-`--from` variant |
+| `sabokit apps add/remove` | edits `environments/<env>/application.yml` textually (uncomment / flip `enabled:`), catalog-validated | — |
+| Compat gate | per-env pin from the unique `?ref=` across the four layer roots; CLI declares supported range (0.2 line) | — |
 
 ## Ordered packs
 
 Each row is one branch, one commit-set, one tag. No PR ceremony; merge to master and tag.
 
-1. ~~**Foundation hardening**~~ — shipped v2026.05.1.
-2. ~~**Preflight DNS + plan-confirm gate**~~ — shipped v2026.05.3.
-3. **`sabokit env add/list/switch`** — `env add <name> [--from <existing-env>]` adds an additional env. Without `--from`, reuses the init prompt + bucket flow. With `--from`, carbon-copies committable files from `environments/<existing-env>/` into `environments/<name>/` (config.tf, README.md, any moved.tf, providers.tf, secrets.tf, variables.tf, main.tf, *.example files) and **skips everything gitignored** (`terraform.tfvars`, `backend.hcl`, `inventory.ini`, `.terraform/`, `.terraform.lock.hcl`). Backend.hcl is regenerated for the new env (bucket name swap). Operator edits config.tf afterwards for env-specific values (project_id, domains, environment string). `env list` enumerates `environments/`. `env switch <name>` rewrites `.sabokit/config.yml` `default_env`.
-   - **partial ship**: `env add <name> --from <existing-env>` landed standalone to unblock dciww-commons staging rebuilds. The `environment = "..."` HCL assignment in config.tf is auto-rewritten; bucket created via the same scw helper init uses. `env list`, `env switch`, and the non-`--from` interactive variant of `env add` still open.
-4. **`sabokit bump <tag>`** — rewrite every `?ref=…` pin under the consumer's TF, optionally bump a sibling sabokit submodule, prompt to run any `moved{}` migrations published in upstream's `consumer-template/modules/stack/migrations.tf` for the new tag.
-5. **`sabokit upgrade <tag>`** — `bump` + `deploy` chain. Pre-apply check refuses state-mutation if any legacy address exists that isn't mapped by a `moved{}` block in the consumer's migrations.tf (backrest-bucket foot-gun).
-6. **`sabokit doctor`** — state bucket reachable; terraform state file present + non-corrupt; every compute host ssh-reachable; remote docker daemon up; traefik routing healthy; certs not within expiry window; most-recent backrest run completed; loki receiving from monitoring agent.
-7. **`sabokit import-base-image <tag>`** — pull `fc-base-<tag>.qcow2` from github release, upload via scaleway object storage + block snapshot + image registration, print resulting `image_id`, offer to inline-edit the relevant `compute_hosts.*.image` key in `config.tf`.
-8. **`sabokit cost-estimate`** — monthly burn from `compute_hosts` shape × scaleway pricing API.
-9. **`sabokit version-check`** — github tags API ping, flag if consumer is behind.
+1. **`sabokit env list/switch`** — `env list` enumerates `environments/`; `env switch <name>` rewrites `.sabokit/config.yml` `default_env`. The non-`--from` interactive variant of `env add` rides along (reuses the init prompt + bucket flow).
+2. **`sabokit bump <tag>`** — rewrite the `?ref=` pin in every layer root's stack.tf, prompt to run any `moved{}` migrations upstream publishes for the new tag.
+3. **`sabokit upgrade <tag>`** — `bump` + per-layer apply chain. Pre-apply check refuses state-mutation if any legacy address exists that isn't mapped by a `moved{}` block.
+4. **`sabokit doctor`** — state bucket reachable per layer; terraform state present + non-corrupt; every compute host ssh-reachable; remote docker daemon up; traefik routing healthy; certs not within expiry window; most-recent backrest run completed; loki receiving from monitoring agent.
+5. **`sabokit import-base-image <tag>`** — wrap `consumer-template/scripts/import-base-image.sh` (download qcow2, object-storage upload, snapshot import, image registration) behind one verb.
+6. **`sabokit cost-estimate`** — monthly burn from the hosts.yml/env.yml shape × scaleway pricing API.
+7. **`sabokit version-check`** — github tags API ping, flag if consumer is behind.
 
 ## Scaffolding non-negotiables
 
-Two rules the upstream operator has surfaced (both **honored as of v2026.05.2**):
+- **`.tfvars` is for secrets only.** Operator-facing config (apps, hostnames, tiers, watchers) lives in the committed per-layer YAML (`env.yml`, `application.yml`, ...). The `env add --from <env>` carbon-copy flow MUST NOT copy `.tfvars` across envs — each env's secrets are its own. `.gitignore` excludes `*.tfvars` and keeps `*.tfvars.example` tracked.
+- **`inventory.ini` is always generated.** The real inventory comes from `terraform output -json compute` on every layer-script run (`scripts/refresh.sh` regenerates it on demand). Never scaffold or hand-edit one.
+- **`terraform.tfvars` is not generated at init.** Consumers don't need one for a normal deploy; the secret path is scaleway secret manager via the layers' data sources, and the Authentik admin token is fetched by `lib.sh` at run time.
 
-- **`.tfvars` is for secrets only.** Operator-facing config (apps, hostnames, image tags, host-services knobs) lives in `config.tf` as `locals.config` + `module "stack"`. The init setup wizard MAY write a `.tfvars` for plaintext-secret-at-apply-time. The `env add --from <env>` carbon-copy flow MUST NOT copy `.tfvars` across envs — each env's secrets are its own. `.gitignore` excludes `*.tfvars` and keeps `*.tfvars.example` tracked.
-- **`inventory.ini.example` is misleading.** The real `inventory.ini` is generated from `terraform output -json compute_hosts` on every `sabokit up`/`deploy`. `scaffoldEnv` strips the placeholder alongside the legacy bash orchestration scripts (`preflight.sh`, `up.sh`, `configure.sh`, `_lib.sh`) — sabokit-cli replaced them.
-- **`terraform.tfvars` is not generated at init.** `init` writes none; consumers don't need one for a normal deploy. The wizard reserves the right to write a `.tfvars` for a future plaintext-secret-at-apply-time variable, but no such variable exists in upstream today. Current secret path is scaleway secret manager via `data "scaleway_secret_version"` blocks in `secrets.tf`.
+## Hardening backlog (non-blocking)
 
-## Hardening backlog (non-blocking for first E2E)
-
-These are gaps surfaced by the v2026.05.3 audit. None block a fresh consumer from doing `sabokit init` → `sabokit up` end-to-end today, because `up`'s preflight covers the same checks before any terraform apply runs. Listed by fail-loud-earliness payoff:
-
-1. **Init-time SCW project probe** — call `scw account project get project-id=<id>` once before the bucket-create loop. Catches wrong/stale API keys with a clean error instead of an opaque `scw object bucket create` failure. ~10 lines.
-2. **Bucket-exists-but-different-ownership guard** — when `BucketExists` says yes, re-fetch and verify it's in the current `SCW_DEFAULT_PROJECT_ID`. Detects S3-namespace collisions (rare but irreversibly confusing when they happen). ~15 lines.
-3. **Init-time SSH-key IAM registration** — promote `EnsureSSHKey` from `up` preflight to also run during `init`. Means the operator finds out about a missing public key when scaffolding, not on first `up`.
-4. **Init-time DNS-zone-delegation check** — promote `ensureDNSZoneDelegated` from `up` preflight to also run during `init`. Same shape as #3 — earlier, louder failure.
-
-Items 1–2 are foundation-tail and ship as a single patch (v2026.05.4) before pack 3. Items 3–4 are creature comfort: they prevent a 30-second `init` from feeling successful when the first `up` is going to fail anyway, but cost the operator nothing today since `up` catches them. Bundle into pack 3 (`env add` interactive) or defer.
+1. **Bucket-exists-but-different-ownership guard** — when `BucketExists` says yes, re-fetch and verify it's in the current `SCW_DEFAULT_PROJECT_ID`. Detects S3-namespace collisions (rare but irreversibly confusing when they happen). ~15 lines.
+2. **Init-time SSH-key IAM registration + DNS-zone-delegation check** — promote both from `up` preflight to also run during `init`, so a 30-second `init` can't feel successful when the first `up` is going to fail anyway. Costs the operator nothing today since `up` catches them.
 
 ## Out of scope (won't build)
 
 - App-specific tooling (backrest UI passthrough, n8n workflow export, grafana dashboard import). Operators reach app UIs via `sabokit ssh` + `sabokit logs`.
 - Replacing terraform or ansible. sabokit-cli sequences and validates; it does not reimplement the declarative engines.
-- Flattening the two-pass Authentik bootstrap. Deferred to the federated-commons v4.0 TF→Blueprints migration.
+- Flattening Authentik's deploy-then-configure rhythm. The identity layer scripts own it; a future TF→Blueprints migration may collapse it upstream.
 - Replacing Scaleway-console-only steps (project creation, IAM key minting). Those stay manual, once per env.
 
 ## Versioning policy
 
-`vX.Y.Z` semver. **The CLI does not choose a blueprint version — each environment does**, via the `?ref=` its terraform pins (`environments/<env>/main.tf`'s `module "stack"` — directly when it's a `git::…?ref=`, or the unique inner `?ref=` of the vendored `modules/stack` for the canonical `../../modules/stack` layout). The CLI reads that pin, runs the matching `sabokit-runner` image, and verifies it can drive it.
+`vX.Y.Z` semver. **The CLI does not choose a blueprint version — each environment does**, via the unique `?ref=` across its four layer roots' `*.tf` (`environments/<env>/{infra,identity,operations,application}/stack.tf`). The CLI reads that pin, runs the matching `sabokit-runner` image, and verifies it can drive it.
 
-- **The CLI declares a supported blueprint range**, not a single pin: `internal/version.SupportedBlueprintMin`–`SupportedBlueprintMax` (major.minor lines). `Min` is a source constant — bump it when dropping support for an old line. `Max` is injected at build = the CLI tag's own major.minor. The CLI is a thin orchestrator, so its coupling (TF target addresses, output shapes, playbook paths, the two-pass bootstrap) changes rarely; one binary can usually drive several blueprint minors.
-- **The runner image follows the env's pin.** `baseInvocation` resolves the `sabokit-runner` tag from the env's pinned version, so the ansible half always matches the terraform half. `--image` / `SABOKIT_IMAGE` override.
-- **Compatibility is gated at action time.** `up`/`deploy`/`down`/`destroy` refuse to run when the env's pinned version falls outside the supported range, with remediation (upgrade the CLI, or re-pin the env). Override: `--skip-version-check` (unsafe — mismatched TF/Ansible can corrupt state). `sabokit version` prints the CLI version, the supported range, and every env's pin with an `[ok]`/`[UNSUPPORTED]` mark.
+- **The CLI declares a supported blueprint range**, not a single pin: `internal/version.SupportedBlueprintMin`–`SupportedBlueprintMax` (major.minor lines). `Min` is a source constant — bump it when dropping support for an old line; it sits at `0.2` because the four-layer layout is the floor. `Max` is injected at build = the CLI tag's own major.minor.
+- **The runner image follows the env's pin.** The runner tag is resolved from the env's pinned version, so the script/ansible half always matches the terraform half — and the baked layer scripts match too. `--image` / `SABOKIT_IMAGE` override.
+- **Compatibility is gated at action time.** `up`/`deploy`/`refresh`/`down`/`destroy` refuse to run when the env's pinned version falls outside the supported range, with remediation (upgrade the CLI, or re-pin the env). Override: `--skip-version-check` (unsafe — mismatched TF/Ansible can corrupt state). `sabokit version` prints the CLI version, the supported range, and every env's pin with an `[ok]`/`[UNSUPPORTED]` mark.
 - **Stable vs beta is just the pinned ref.** Pin `?ref=v0.5.0-beta1` and you get the beta terraform *and* the beta runner image, reproducibly, per-env. No CLI channel flag.
-- **dev / source builds** report `0.1.0-dev` (or `git describe`) and leave the supported range at its source default.
-- **The `v2026.05.x` calver line is frozen history.** The CLI restarted at `v0.1.0` semver in tandem with the blueprint reset. Do not retag the calver releases.
+- **dev / source builds** report `-dev` (or `git describe`) and leave the supported range at its source default.
 - **Breaking changes** bump major/minor per semver and are flagged in CHANGELOG entries.

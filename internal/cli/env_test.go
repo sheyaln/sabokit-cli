@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sheyaln/sabokit-cli/internal/envvalues"
+	"github.com/sheyaln/sabokit-cli/internal/project"
 )
 
 // seedEnvDir writes a fully-populated environments/<env>/ that mirrors
@@ -344,5 +345,128 @@ func TestValidateEnvName(t *testing.T) {
 		if err := validateEnvName(n); err == nil {
 			t.Errorf("%q should be invalid", n)
 		}
+	}
+}
+
+// seedFourLayerEnvDir writes a four-layer environments/<env>/ mirroring the
+// v0.2 consumer shape.
+func seedFourLayerEnvDir(t *testing.T, projectRoot, env string) {
+	t.Helper()
+	dir := filepath.Join(projectRoot, "environments", env)
+	for _, layer := range project.Layers {
+		if err := os.MkdirAll(filepath.Join(dir, layer), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{
+			"stack.tf":            `module "` + layer + `" { source = "git::https://github.com/sheyaln/sabokit.git//platform/` + layer + `/terraform?ref=v0.2.0" }`,
+			"providers.tf":        "# providers\n",
+			"backend.hcl":         `bucket = "demo-sabokit-state-` + env + `"` + "\nkey = \"" + layer + "/terraform.tfstate\"\n",
+			"backend.hcl.example": `bucket = "x"` + "\n",
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(dir, layer, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rootFiles := map[string]string{
+		"env.yml":            "scaleway_project_id: \"proj-" + env + "-uuid\"\nbase_domain: \"example.org\"\nidentity_domain: \"auth.example.org\"\ninfra_email: \"ops@example.org\"\nprivate_network_subnet: 172.16.0.0/22\n",
+		"hosts.yml":          "compute_hosts: {}\n",
+		"infra.yml":          "postgres_enabled: true\n",
+		"identity.yml":       "tier_slots: []\n",
+		"operations.yml":     "grafana:\n  enabled: true\n",
+		"application.yml":    "outline:\n  enabled: true\n",
+		"inventory.ini":      "[apps]\n",
+		".enabled_apps.json": "{}\n",
+	}
+	for name, content := range rootFiles {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestEnvAddFourLayer(t *testing.T) {
+	root := seedProjectRoot(t)
+	// legacy env-values.yml carries a staging block — its values must seed
+	// the new env.yml.
+	stagingBlock := `staging:
+  scaleway_project_id: "proj-staging-uuid"
+  base_domain: "example.org"
+  identity_domain: "auth.example.org"
+  infra_email: "ops@example.org"
+`
+	evPath := filepath.Join(root, "environments", "env-values.yml")
+	existing, _ := os.ReadFile(evPath)
+	if err := os.WriteFile(evPath, append(existing, []byte(stagingBlock)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedFourLayerEnvDir(t, root, "prod")
+	withCwd(t, root)
+
+	if err := runEnvAdd("staging", &envAddFlags{from: "prod", skipBucket: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(root, "environments", "staging")
+	// per-layer backend.hcl regenerated against the env-suffix-swapped bucket
+	for _, layer := range project.Layers {
+		body, err := os.ReadFile(filepath.Join(dst, layer, "backend.hcl"))
+		if err != nil {
+			t.Fatalf("missing %s/backend.hcl: %v", layer, err)
+		}
+		if !strings.Contains(string(body), `bucket = "demo-sabokit-state-staging"`) {
+			t.Errorf("%s/backend.hcl bucket not derived from source scheme:\n%s", layer, body)
+		}
+		if strings.Contains(string(body), "demo-sabokit-state-prod") {
+			t.Errorf("%s/backend.hcl retains prod bucket:\n%s", layer, body)
+		}
+	}
+	// env.yml seeded from the legacy staging block, not prod's values
+	envYML, err := os.ReadFile(filepath.Join(dst, "env.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envYML), "proj-staging-uuid") {
+		t.Errorf("env.yml should carry the legacy staging project id:\n%s", envYML)
+	}
+	if strings.Contains(string(envYML), "proj-prod-uuid") {
+		t.Errorf("env.yml must not carry prod's project id:\n%s", envYML)
+	}
+	// runtime artifacts didn't travel
+	for _, absent := range []string{"inventory.ini", ".enabled_apps.json"} {
+		if _, err := os.Stat(filepath.Join(dst, absent)); !os.IsNotExist(err) {
+			t.Errorf("%s should not be copied", absent)
+		}
+	}
+	// layer config files did travel
+	for _, present := range []string{"hosts.yml", "application.yml", "infra/stack.tf"} {
+		if _, err := os.Stat(filepath.Join(dst, present)); err != nil {
+			t.Errorf("%s should be copied: %v", present, err)
+		}
+	}
+}
+
+func TestEnvAddFourLayerPlaceholdersWithoutLegacy(t *testing.T) {
+	root := seedProjectRoot(t)
+	common := "org_slug: demo\norg_name: Demo\n"
+	if err := os.WriteFile(filepath.Join(root, "environments", "common.yml"), []byte(common), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedFourLayerEnvDir(t, root, "prod")
+	withCwd(t, root)
+
+	if err := runEnvAdd("dev", &envAddFlags{from: "prod", skipBucket: true}); err != nil {
+		t.Fatal(err)
+	}
+	envYML, err := os.ReadFile(filepath.Join(root, "environments", "dev", "env.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envYML), "REPLACE-with-dev-project-uuid") {
+		t.Errorf("env.yml should get a placeholder project id:\n%s", envYML)
+	}
+	if strings.Contains(string(envYML), "proj-prod-uuid") {
+		t.Errorf("env.yml must not carry prod's project id:\n%s", envYML)
 	}
 }

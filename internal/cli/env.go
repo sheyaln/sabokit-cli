@@ -35,15 +35,19 @@ func newEnvAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <name> --from <existing-env>",
 		Short: "scaffold a new env by carbon-copying an existing one",
-		Long: `add <name> creates environments/<name>/ by carbon-copying the env root
-from environments/<existing-env>/ (config.tf, env.tf, *.tf — all byte-identical
-across envs) and skipping per-env state, locks, and runtime artifacts
-(backend.hcl, inventory.ini, .terraform/, *.tfstate*, *.tfvars).
+		Long: `add <name> creates environments/<name>/ by carbon-copying the env tree
+from environments/<existing-env>/ (the per-layer roots, the layer YAML
+config, hosts.yml — identical across envs) and skipping per-env state,
+locks, and runtime artifacts (backend.hcl, inventory.ini, .terraform/,
+*.tfstate*, *.tfvars, derived json).
 
-backend.hcl is regenerated to point at "<org-slug>-tfstate-<name>", and a
-"<name>:" block is appended to environments/env-values.yml with placeholder
-project_id/domains for you to fill in (each env needs a distinct project). No
-env-specific value lives in the env dir, so the copy carries nothing to rewrite.
+each layer's backend.hcl is regenerated against the new env's state bucket
+(derived from the source env's bucket name, falling back to
+"<org-slug>-tfstate-<name>"), and env.yml's per-env identity
+(scaleway_project_id, domains) is reset to placeholders — unless the
+legacy environments/env-values.yml already carries a "<name>:" block, in
+which case those values seed the new env.yml. every env needs a distinct
+scaleway project.
 
 a fresh Scaleway state bucket is created for the new env (--skip-bucket
 to opt out).`,
@@ -86,11 +90,10 @@ func runEnvAdd(name string, f *envAddFlags) error {
 		return fmt.Errorf("environments/%s already exists", name)
 	}
 
-	orgSlug, err := readOrgSlug(proj.Root)
+	bucket, err := deriveBucketName(proj.Root, srcDir, name, f.from)
 	if err != nil {
 		return err
 	}
-	bucket := fmt.Sprintf("%s-tfstate-%s", orgSlug, name)
 	if len(bucket) > 63 {
 		return fmt.Errorf("derived bucket name %q is %d chars; scaleway caps at 63 — shorten env name or org-slug", bucket, len(bucket))
 	}
@@ -102,17 +105,38 @@ func runEnvAdd(name string, f *envAddFlags) error {
 	}
 	done()
 
-	done = step(fmt.Sprintf("appending %q block to environments/env-values.yml", name))
-	if err := addEnvValuesBlock(proj.Root, name, f.from); err != nil {
-		return err
-	}
-	done()
+	fourLayer := isFourLayerDir(srcDir)
+	if fourLayer {
+		done = step(fmt.Sprintf("seeding environments/%s/env.yml", name))
+		seeded, err := seedEnvYML(proj.Root, dstDir, name)
+		if err != nil {
+			return err
+		}
+		done()
+		if seeded {
+			fmt.Printf("    (values taken from the legacy env-values.yml %q block)\n", name)
+		}
 
-	done = step(fmt.Sprintf("regenerating backend.hcl (bucket %s)", bucket))
-	if err := writeBackendHCL(dstDir, bucket); err != nil {
-		return err
+		done = step(fmt.Sprintf("regenerating per-layer backend.hcl (bucket %s)", bucket))
+		for _, layer := range project.Layers {
+			if err := writeLayerBackendHCL(dstDir, layer, bucket); err != nil {
+				return err
+			}
+		}
+		done()
+	} else {
+		done = step(fmt.Sprintf("appending %q block to environments/env-values.yml", name))
+		if err := addEnvValuesBlock(proj.Root, name, f.from); err != nil {
+			return err
+		}
+		done()
+
+		done = step(fmt.Sprintf("regenerating backend.hcl (bucket %s)", bucket))
+		if err := writeBackendHCL(dstDir, bucket); err != nil {
+			return err
+		}
+		done()
 	}
-	done()
 
 	if !f.skipBucket {
 		done = step(fmt.Sprintf("ensuring TF-state bucket %s", bucket))
@@ -123,10 +147,92 @@ func runEnvAdd(name string, f *envAddFlags) error {
 	}
 
 	fmt.Printf("\ndone. copied %d file(s) into environments/%s/.\n", copied, name)
-	fmt.Printf("    edit the %q block in environments/env-values.yml — set a real\n", name)
-	fmt.Println("    scaleway_project_id, base_domain, identity_domain (placeholders were written).")
+	if fourLayer {
+		fmt.Printf("    check environments/%s/env.yml — scaleway_project_id, domains, sizing\n", name)
+		fmt.Printf("    must be real values (each env needs a distinct scaleway project).\n")
+	} else {
+		fmt.Printf("    edit the %q block in environments/env-values.yml — set a real\n", name)
+		fmt.Println("    scaleway_project_id, base_domain, identity_domain (placeholders were written).")
+	}
 	fmt.Printf("    secrets come from the environment / .envrc before 'sabokit --env %s up'.\n", name)
 	return nil
+}
+
+// isFourLayerDir reports whether an env directory follows the four-layer
+// layout (per-layer roots + env.yml).
+func isFourLayerDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "env.yml")); err != nil {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "infra", "stack.tf"))
+	return err == nil
+}
+
+// deriveBucketName picks the new env's state-bucket name: when the source
+// env's backend.hcl bucket ends in "-<from>", the suffix swaps for the new
+// env name (preserving whatever naming scheme the consumer uses); otherwise
+// the canonical "<org-slug>-tfstate-<name>".
+func deriveBucketName(projectRoot, srcDir, name, from string) (string, error) {
+	for _, candidate := range []string{
+		filepath.Join(srcDir, "infra", "backend.hcl"),
+		filepath.Join(srcDir, "backend.hcl"),
+	} {
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		if m := backendBucketRe.FindSubmatch(raw); m != nil {
+			src := string(m[1])
+			if strings.HasSuffix(src, "-"+from) {
+				return strings.TrimSuffix(src, "-"+from) + "-" + name, nil
+			}
+		}
+	}
+	orgSlug, err := readOrgSlug(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-tfstate-%s", orgSlug, name), nil
+}
+
+// seedEnvYML resets the copied env.yml's per-env identity. When the legacy
+// env-values.yml carries a block for the new env (the common case when
+// migrating from the keyed layout), its values win; otherwise the identity
+// keys get placeholders. Returns whether legacy values were used. Textual
+// per-key replacement keeps the file's comments intact.
+func seedEnvYML(projectRoot, dstDir, name string) (bool, error) {
+	path := filepath.Join(dstDir, "env.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	content := string(raw)
+
+	seed := map[string]string{
+		"scaleway_project_id": "REPLACE-with-" + name + "-project-uuid",
+		"base_domain":         "CHANGEME-" + name + "-base-domain",
+		"identity_domain":     "CHANGEME-" + name + "-gateway-domain",
+	}
+	fromLegacy := false
+	if legacy, err := envvalues.Get(projectRoot, name); err == nil {
+		fromLegacy = true
+		for _, k := range []string{"scaleway_project_id", "base_domain", "mgmt_domain", "identity_domain", "infra_email", "scaleway_region", "scaleway_zone", "private_network_subnet"} {
+			if v := legacy.String(k); v != "" {
+				seed[k] = v
+			}
+		}
+	}
+	for k, v := range seed {
+		content = setYAMLScalar(content, k, v)
+	}
+	return fromLegacy, os.WriteFile(path, []byte(content), 0o644)
+}
+
+// setYAMLScalar replaces the value of a top-level `key: value` line, keeping
+// any trailing comment. No-op when the key is absent.
+func setYAMLScalar(content, key, value string) string {
+	re := regexp.MustCompile(`(?m)^(` + regexp.QuoteMeta(key) + `:\s*)("[^"]*"|\S+)?`)
+	return re.ReplaceAllString(content, "${1}\""+value+"\"")
 }
 
 // envNameRe restricts new env names to lowercase alphanumeric + hyphens,
@@ -155,6 +261,7 @@ var envCopySkipExact = map[string]struct{}{
 	".env":                {},
 	".ansible-vars.json":  {},
 	".tf-output.json":     {},
+	".enabled_apps.json":  {},
 }
 
 // envCopySkipDir lists directory basenames pruned during the walk.
@@ -314,11 +421,18 @@ func ensureEnvStateBucket(bucket, region string) error {
 	return client.CreateBucket(bucket, region)
 }
 
-// readOrgSlug pulls org_slug from any committed config.tf under
-// environments/<env>/ — every env's config.tf carries the same org_slug
-// (it's the cross-env identifier). Falls back to scanning each env until
-// it finds a populated value.
+// readOrgSlug pulls org_slug from environments/common.yml (the four-layer
+// cross-env identity file), falling back to the legacy config.tf scan for
+// pre-0.2 layouts.
 func readOrgSlug(projectRoot string) (string, error) {
+	if raw, err := os.ReadFile(filepath.Join(projectRoot, "environments", "common.yml")); err == nil {
+		var common struct {
+			OrgSlug string `yaml:"org_slug"`
+		}
+		if err := yaml.Unmarshal(raw, &common); err == nil && common.OrgSlug != "" {
+			return common.OrgSlug, nil
+		}
+	}
 	envs, err := os.ReadDir(filepath.Join(projectRoot, "environments"))
 	if err != nil {
 		return "", fmt.Errorf("read environments/: %w", err)
@@ -337,5 +451,5 @@ func readOrgSlug(projectRoot string) (string, error) {
 			return m[1], nil
 		}
 	}
-	return "", fmt.Errorf("could not derive org_slug from any environments/*/config.tf — populate one env first or pass --skip-bucket")
+	return "", fmt.Errorf("could not derive org_slug — set it in environments/common.yml, or pass --skip-bucket")
 }

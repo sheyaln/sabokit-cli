@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/sheyaln/sabokit-cli/internal/docker"
 	"github.com/sheyaln/sabokit-cli/internal/project"
-	"github.com/sheyaln/sabokit-cli/internal/tf"
 	"github.com/spf13/cobra"
 )
 
@@ -20,22 +18,18 @@ func newStatusCmd() *cobra.Command {
 	var dryRun, skipRefresh bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "terraform output + container state per host",
+		Short: "enabled apps + container state per host",
 		Long: `prints two sections:
 
-  1. terraform outputs — reads <env>/.tf-output.json (written by
-     consumer-template's up.sh) and prints the top-level keys as a table.
-     this does NOT shell out to terraform; sabokit relies on the env's
-     existing snapshot. if .tf-output.json is missing, the section is
-     skipped with a hint to run up.sh.
+  1. enabled apps — reads <env>/.enabled_apps.json (written by the layer
+     scripts / 'sabokit refresh') and lists each app with its URL.
 
   2. container state — runs 'ansible all -m shell -a "docker ps ..."' over
      ssh against the env's inventory. --servers passes through to ansible
-     --limit. --apps post-filters the container listing (does NOT filter
-     the terraform section).
+     --limit. --apps post-filters the container listing.
 
-requires docker live for the container-state section only. tf section is
-host-side json parsing.`,
+both sections are refreshed from terraform state first unless
+--skip-refresh is passed.`,
 		Example: `  sabokit status
   sabokit status --servers app01
   sabokit status --apps espocrm,authentik
@@ -47,7 +41,7 @@ host-side json parsing.`,
 	cmd.Flags().StringSliceVar(&apps, "apps", nil, "filter container list by app name")
 	cmd.Flags().StringSliceVar(&servers, "servers", nil, "restrict to specific hosts")
 	cmd.Flags().BoolVar(&dryRun, "print", false, "print the docker invocation without running it")
-	cmd.Flags().BoolVar(&skipRefresh, "skip-refresh", false, "skip re-running terraform output to refresh .tf-output.json + inventory.ini")
+	cmd.Flags().BoolVar(&skipRefresh, "skip-refresh", false, "skip regenerating inventory.ini + .enabled_apps.json first")
 	return cmd
 }
 
@@ -71,82 +65,47 @@ func runStatus(apps, servers []string, dryRun, skipRefresh bool) error {
 	}
 
 	if !skipRefresh {
-		if err := refreshIfEnv(p, tf.New(globals.TFImage, globals.Platform, p.Root)); err != nil {
-			return err
+		if envName := p.EnvName(globals.Env); envName != "" {
+			if err := runScript(p, "refresh.sh", envName); err != nil {
+				return err
+			}
 		}
 	}
 
-	fmt.Println("== terraform outputs ==")
-	printTFOutputs(p, globals.Env)
+	fmt.Println("== enabled apps ==")
+	printEnabledAppsSection(p)
 	fmt.Println()
 
 	fmt.Println("== container state ==")
 	return printContainerState(p, apps, servers)
 }
 
-type tfOutput struct {
-	Value     any  `json:"value"`
-	Sensitive bool `json:"sensitive"`
-}
-
-func printTFOutputs(p *project.Project, envOverride string) {
-	path := p.TFOutputPath(envOverride)
-	if path == "" {
-		fmt.Println("(no env set — skipping; pass --env or set default_env in .sabokit/config.yml)")
-		return
-	}
-	raw, err := os.ReadFile(path)
+func printEnabledAppsSection(p *project.Project) {
+	apps, err := p.EnvApps(globals.Env)
 	if err != nil {
-		fmt.Printf("(no .tf-output.json at %s — run up.sh in the env dir to generate)\n", path)
+		fmt.Printf("(%v)\n", err)
 		return
 	}
-	var outputs map[string]tfOutput
-	if err := json.Unmarshal(raw, &outputs); err != nil {
-		fmt.Printf("(parse error in %s: %v)\n", path, err)
-		return
-	}
-	if len(outputs) == 0 {
-		fmt.Println("(empty tf outputs)")
-		return
-	}
-
-	keys := make([]string, 0, len(outputs))
-	for k := range outputs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
+	sort.Slice(apps, func(i, j int) bool { return apps[i].ID < apps[j].ID })
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "KEY\tVALUE")
-	for _, k := range keys {
-		fmt.Fprintf(tw, "%s\t%s\n", k, formatTfValue(outputs[k]))
+	fmt.Fprintln(tw, "APP\tURL")
+	for _, a := range apps {
+		if !a.Enabled {
+			continue
+		}
+		fmt.Fprintf(tw, "%s\t%s\n", a.ID, a.URL)
 	}
 	tw.Flush()
 }
 
-func formatTfValue(o tfOutput) string {
-	if o.Sensitive {
-		return "<sensitive>"
-	}
-	switch v := o.Value.(type) {
-	case string:
-		return v
-	case nil:
-		return ""
-	default:
-		b, _ := json.Marshal(v)
-		s := string(b)
-		if len(s) > 120 {
-			s = s[:117] + "..."
-		}
-		return s
-	}
-}
-
 func containerStateInvocation(p *project.Project, servers []string) (docker.Invocation, error) {
+	envName := p.EnvName(globals.Env)
+	if envName == "" {
+		return docker.Invocation{}, fmt.Errorf("status requires an env (pass --env or set default_env in .sabokit/config.yml)")
+	}
 	cmd := []string{
 		"all",
-		"-i", containerWorkspace + "/" + p.Config.Inventory,
+		"-i", "environments/" + envName + "/" + p.Config.Inventory,
 		"-m", "shell",
 		"-a", "docker ps --format '{{.Names}}\t{{.Status}}'",
 		"-o",
@@ -154,14 +113,14 @@ func containerStateInvocation(p *project.Project, servers []string) (docker.Invo
 	if len(servers) > 0 {
 		cmd = append(cmd, "--limit", strings.Join(servers, ","))
 	}
-	inv, err := baseInvocation(p)
+	inv, err := repoInvocation(p)
 	if err != nil {
 		return docker.Invocation{}, err
 	}
 	inv.TTY = false
-	inv.Workdir = playbookDir
 	inv.Entrypoint = "ansible"
 	inv.Cmd = cmd
+	inv.Env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
 	return inv, nil
 }
 

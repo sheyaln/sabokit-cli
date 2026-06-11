@@ -15,18 +15,29 @@ var (
 	refRe         = regexp.MustCompile(`\?ref=([A-Za-z0-9._-]+)`)
 )
 
-// BlueprintVersion resolves the sabokit version the given environment pins, by
-// reading environments/<env>/main.tf's `module "stack"` source:
+// BlueprintVersion resolves the sabokit version the given environment pins.
 //
-//   - a remote source (git::...?ref=vX.Y.Z) yields that ref directly;
-//   - a local source (../../modules/stack) is the canonical vendored pattern —
-//     the version is the unique ?ref= across that module's *.tf files.
+// Four-layer layout: the version is the unique ?ref= across the four layer
+// roots' *.tf files (environments/<env>/{infra,identity,operations,
+// application}/) — a mixed set means a half-applied version bump and errors.
 //
-// Returns the ref string, eg. "v0.1.0".
+// Legacy single-stack layout: environments/<env>/main.tf's `module "stack"`
+// source — a remote source (git::...?ref=vX.Y.Z) yields that ref directly; a
+// local source (../../modules/stack) reads the unique ?ref= across that
+// module's *.tf files.
+//
+// Returns the ref string, eg. "v0.2.0-beta2".
 func (p *Project) BlueprintVersion(envOverride string) (string, error) {
 	dir, err := p.WorkspaceDir(envOverride)
 	if err != nil {
 		return "", err
+	}
+	if p.IsFourLayer(envOverride) {
+		dirs := make([]string, 0, len(Layers))
+		for _, l := range Layers {
+			dirs = append(dirs, filepath.Join(dir, l))
+		}
+		return uniqueRef(dirs...)
 	}
 	mainTF := filepath.Join(dir, "main.tf")
 	src, err := stackSource(mainTF)
@@ -58,26 +69,30 @@ func stackSource(mainTFPath string) (string, error) {
 	return string(m[1]), nil
 }
 
-// uniqueRef collects the distinct ?ref= pins across dir/*.tf and returns the
-// single value, erroring on none or on a mix (a half-applied version bump).
-func uniqueRef(dir string) (string, error) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.tf"))
-	if err != nil {
-		return "", err
-	}
+// uniqueRef collects the distinct ?ref= pins across each dir's *.tf files and
+// returns the single value, erroring on none or on a mix (a half-applied
+// version bump).
+func uniqueRef(dirs ...string) (string, error) {
 	set := map[string]struct{}{}
-	for _, f := range files {
-		data, err := os.ReadFile(f)
+	for _, dir := range dirs {
+		files, err := filepath.Glob(filepath.Join(dir, "*.tf"))
 		if err != nil {
 			return "", err
 		}
-		for _, m := range refRe.FindAllStringSubmatch(string(data), -1) {
-			set[m[1]] = struct{}{}
+		for _, f := range files {
+			data, err := os.ReadFile(f)
+			if err != nil {
+				return "", err
+			}
+			for _, m := range refRe.FindAllStringSubmatch(string(data), -1) {
+				set[m[1]] = struct{}{}
+			}
 		}
 	}
+	where := strings.Join(dirs, ", ")
 	switch len(set) {
 	case 0:
-		return "", fmt.Errorf("no ?ref= pins found under %s (is the stack module vendored?)", dir)
+		return "", fmt.Errorf("no ?ref= pins found under %s (is the blueprint module pinned?)", where)
 	case 1:
 		for r := range set {
 			return r, nil
@@ -88,5 +103,5 @@ func uniqueRef(dir string) (string, error) {
 		refs = append(refs, r)
 	}
 	sort.Strings(refs)
-	return "", fmt.Errorf("ambiguous sabokit version under %s: multiple refs pinned (%s) — unify them with a version bump", dir, strings.Join(refs, ", "))
+	return "", fmt.Errorf("ambiguous sabokit version under %s: multiple refs pinned (%s) — unify them with a version bump", where, strings.Join(refs, ", "))
 }
